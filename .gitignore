@@ -1,6 +1,6 @@
-company.yaml
-secrets.yaml
-handbook.md
+/company.yaml
+/secrets.yaml
+/handbook.md
 venv/
 shared/
 harness/
