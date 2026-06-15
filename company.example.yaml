@@ -1,0 +1,57 @@
+# Org chart + company config. Copy to company.yaml and edit.
+# setup.sh writes this for you from your answers; you only hand-edit it
+# later when changing the org. World-readable on the host — agents consult
+# it to identify people by ID. No secrets here; the bot token lives in
+# secrets.yaml.
+
+org: acme                  # the namespacing slug: lowercase letters/digits,
+                           # <=12 chars. Becomes the unix group, the user
+                           # prefix (acme-hr) and the unit prefix
+                           # (acme-hr.service).
+name: Acme Corp            # human display name, used in handbook prose.
+
+ceo:
+  name: Jane Doe
+  telegram_user_id: 123456789
+
+# The forum supergroup all agents live in (Topics enabled). Create it, add
+# your one bot as an admin, then setup.sh fills in the chat id for you.
+telegram_chat_id: "-1001234567890"
+
+# The whole company runs on ONE Telegram bot. Each agent talks to its own
+# forum topic through the local mux, which holds the bot token and routes by
+# topic. Agents point their Telegram calls here instead of api.telegram.org.
+mux_url: http://127.0.0.1:8811
+
+# LLM provider. Agents send requests through the local llm proxy (per-agent
+# request logging), which forwards to the provider named here. `provider` is
+# the proxy's prefix for your upstream: kimi (moonshot), deepseek, openai,
+# claude, xai, gemini, openrouter.
+provider: kimi
+model: kimi-k2.6
+proxy_url: http://127.0.0.1:8810
+# api_base: https://api.moonshot.ai/v1   # only used if proxy_url is unset (agents talk to the provider directly)
+
+# One entry per agent. Key = role; unix user = <org>-<key>.
+# soul: which template in templates/souls/ to use (defaults to the key —
+#   set it when cloning a role, e.g. labs-2 with soul: labs).
+# topic_id: the agent's forum topic. setup.sh creates one topic per agent
+#   (via the bot's Bot API) and fills this in — leave it out by hand.
+agents:
+  hr:
+    sudo: true             # Chief of Staff runs provisioning; only agent with sudo
+    description: Head of HR and Chief of Staff. Manages headcount, offboarding,
+      performance monitoring, soul standards, workforce planning. As CoS,
+      oversees the company, proactively reaches out to the team, and plans and
+      improves systems and processes on the CEO's behalf.
+  sysadmin:
+    description: 'Systems Administrator. Owns and maintains the technical
+      substrate: provisioning code, the mux, systemd units, the agent harness.
+      Does not run people-ops (hr does that).'
+  labs:
+    description: Exploration and builder agent. Investigates tools and
+      techniques, prototypes capabilities the company does not yet have, and
+      publishes findings at shared/labs/<slug>/.
+  trainer:
+    description: Company trainer. Coaches agents on company principles and best
+      practices; audits, training cases, knowledge spread.
