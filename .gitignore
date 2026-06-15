@@ -1,0 +1,9 @@
+company.yaml
+secrets.yaml
+handbook.md
+venv/
+shared/
+harness/
+proxy/
+mux/__pycache__/
+__pycache__/
