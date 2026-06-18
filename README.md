@@ -30,7 +30,7 @@ You need: an Ubuntu host (22.04+) with root, a Telegram account, and an LLM API
 key (any OpenAI-compatible provider).
 
 ```bash
-sudo git clone https://github.com/<you>/attosys /opt/attosys && cd /opt/attosys
+sudo git clone https://github.com/tetratorus/attosys /opt/attosys && cd /opt/attosys
 sudo ./setup.sh
 ```
 
@@ -59,9 +59,9 @@ token — and there are no per-agent bots to mint or manage.
 
 ```
 /opt/attosys/                  # repo + generated state
-  harness/                     # the agent harness (vendored, pinned — see harness/VENDOR.md)
+  harness/                     # the agent harness (pulled from upstream)
   mux/mux.py                   # one bot -> N agents, demuxed by topic
-  proxy/                       # llm proxy: per-agent request logging (see proxy/VENDOR.md)
+  proxy/                       # llm proxy: per-agent request logging
   venv/                        # harness python venv
   company.yaml                 # org chart — world-readable, agents consult it
   secrets.yaml                 # bot token + API key — root only, agents never read it
