@@ -1,21 +1,22 @@
 #!/bin/bash
-# Clone + build the llm proxy (proxy/) at a pinned commit, plus Node.js and the
+# Clone + build the llm proxy (proxy/) from latest upstream, plus Node.js and the
 # build tools its native sqlite module needs. Idempotent. Called by setup.sh;
 # can also be run standalone. Run as root.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# llm proxy, pinned. Allows hyphens in agent tags so attosys unix names
-# (acme-hr) route as /<agent>/<provider>/v1. Bump deliberately.
+# llm proxy. Allows hyphens in agent tags so attosys unix names (acme-hr) route
+# as /<agent>/<provider>/v1.
 LLMPROXY_REPO=https://github.com/tetratorus/llmproxy
-LLMPROXY_SHA=3f2143852711bef745cee9283c833db552a8beca
 
 if [ ! -d proxy/.git ]; then
   rm -rf proxy
   git clone -q "$LLMPROXY_REPO" proxy
 fi
 git -C proxy fetch -q origin
-git -C proxy checkout -q "$LLMPROXY_SHA"
+LLMPROXY_BRANCH="$(git -C proxy remote show origin | awk '/HEAD branch/ {print $NF}')"
+git -C proxy checkout -q -B "$LLMPROXY_BRANCH" "origin/$LLMPROXY_BRANCH"
+git -C proxy pull -q --ff-only origin "$LLMPROXY_BRANCH"
 
 if ! command -v node >/dev/null 2>&1; then
   echo "installing Node.js..."
