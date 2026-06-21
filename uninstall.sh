@@ -1,9 +1,9 @@
 #!/bin/bash
 # attosys uninstall — remove everything setup.sh + hire.py created on this host.
 #
-#   sudo ./uninstall.sh             # remove the runtime + durable state; keep repo
-#   sudo ./uninstall.sh --keep-state  # keep /var/lib/attosys (topic-id state, so
-#                                     # a reinstall reuses existing forum topics)
+#   sudo ./uninstall.sh             # remove the runtime + durable state + TG topics; keep repo
+#   sudo ./uninstall.sh --keep-state  # keep /var/lib/attosys AND the forum topics
+#                                     # (reinstall reuses them)
 #   sudo ./uninstall.sh --purge     # also delete /opt/attosys (the repo itself)
 #   sudo ./uninstall.sh -y          # skip the confirmation prompt
 #
@@ -11,11 +11,12 @@
 # slug + agents; otherwise infers them from installed systemd units so a
 # half-deleted install (or a missing company.yaml) can still be cleaned up.
 #
-# By default this is a true uninstall — a clean slate. Durable topic-id state
-# at /var/lib/attosys/<org>.yaml is dropped, so the next setup.sh creates a
-# fresh set of forum topics. Pass --keep-state if you're reinstalling on the
-# same supergroup and want to reuse the existing topics (otherwise you'd get
-# duplicates, since Telegram has no list-topics API).
+# By default this is a true uninstall — a clean slate. It also deletes the
+# forum topics it created in Telegram (using the bot token from secrets.yaml
+# + the topic_id map from /var/lib/attosys/<org>.yaml), so the supergroup
+# is left clean too. Both files are read BEFORE deletion. Pass --keep-state
+# to skip topic deletion and preserve the state file (reinstall on the same
+# supergroup reuses the existing topics).
 #
 # The one thing it cannot remove is the Telegram side (forum topics in your
 # supergroup) — a bot can't bulk-delete topics. Delete them by hand in Telegram
@@ -148,11 +149,49 @@ systemctl daemon-reload
 set -e
 
 # --- remove generated state inside the repo (keep the scripts) --------------
+# Read secrets.yaml + durable state BEFORE deleting them — we need the bot
+# token to delete forum topics, and the state file maps org -> topic_ids.
+BOT_TOKEN=""
+[ -f "$ROOT/secrets.yaml" ] && BOT_TOKEN=$(python3 -c "
+import yaml,sys
+try: print(yaml.safe_load(open('$ROOT/secrets.yaml')).get('telegram_bot_token') or '')
+except Exception: pass" 2>/dev/null || true)
+
 echo "=== removing generated state ==="
 rm -rf "$ROOT/venv" "$ROOT/harness" "$ROOT/proxy" "$ROOT/shared" \
        "$ROOT/handbook.md" "$ROOT/company.yaml" "$ROOT/secrets.yaml" \
        "$ROOT/mux/__pycache__" "$ROOT/__pycache__"
 echo "  cleaned: venv/ harness/ proxy/ shared/ handbook.md company.yaml secrets.yaml"
+
+# --- delete forum topics (using durable state + bot token, both pre-nuke) ----
+# Telegram has no list-topics API, so we can only delete what we recorded.
+# --keep-state skips this (topics stay for reuse on reinstall). Done before
+# nuking /var/lib/attosys so we still have the topic_id map.
+if [ "$KEEP_STATE" -ne 1 ] && [ -n "$BOT_TOKEN" ]; then
+  for ORG in "${ORGS[@]}"; do
+    state_file="/var/lib/attosys/${ORG}.yaml"
+    [ -f "$state_file" ] || continue
+    chat_id=$(python3 -c "import yaml;print(yaml.safe_load(open('$state_file')).get('chat_id') or '')" 2>/dev/null || true)
+    [ -z "$chat_id" ] && continue
+    python3 - "$BOT_TOKEN" "$chat_id" "$state_file" <<'PY' || true
+import sys, urllib.request, urllib.parse, yaml
+token, chat_id, state_file = sys.argv[1], sys.argv[2], sys.argv[3]
+st = yaml.safe_load(open(state_file)) or {}
+deleted = 0
+for role, tid in (st.get("agents") or {}).items():
+    if not tid: continue
+    url = f"https://api.telegram.org/bot{token}/deleteForumTopic"
+    data = urllib.parse.urlencode({"chat_id": chat_id, "message_thread_id": int(tid)}).encode()
+    try:
+        r = urllib.request.urlopen(url, data, timeout=15).read().decode()
+        import json; ok = json.loads(r).get("ok")
+        if ok: deleted += 1; print(f"  deleted topic {role} ({tid})")
+    except Exception as e:
+        print(f"  skip topic {role} ({tid}): {e}")
+if deleted: print(f"  removed {deleted} forum topic(s) for org {st.get('org')}")
+PY
+  done
+fi
 
 # --- durable topic-id state (dropped by default; --keep-state preserves) -----
 if [ "$KEEP_STATE" -eq 1 ]; then

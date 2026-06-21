@@ -102,21 +102,22 @@ token — and there are no per-agent bots to mint or manage.
 Remove everything `setup.sh` + `hire.py` created on the host — systemd units,
 agent unix users + homes, the shared group, sudoers files, generated state
 (`venv/`, `harness/`, `proxy/`, `shared/`, `handbook.md`, `company.yaml`,
-`secrets.yaml`), and durable topic-id state (`/var/lib/attosys/<org>.yaml`).
-Idempotent; reads `company.yaml` for the org + agents, or infers them from
-installed units if the config is already gone.
+`secrets.yaml`), durable topic-id state (`/var/lib/attosys/<org>.yaml`), and
+the forum topics it created in Telegram. Idempotent; reads `company.yaml`
+for the org + agents, or infers them from installed units if the config is
+already gone.
 
 ```bash
-sudo ./uninstall.sh             # true clean slate: runtime + state gone, repo kept
-sudo ./uninstall.sh --keep-state  # keep topic-id state so a reinstall reuses topics
+sudo ./uninstall.sh             # true clean slate: runtime + state + topics gone
+sudo ./uninstall.sh --keep-state  # keep topic-id state AND the forum topics (reinstall reuses them)
 sudo ./uninstall.sh --purge     # also delete /opt/attosys itself
 sudo ./uninstall.sh -y          # skip the confirmation prompt
 ```
 
-By default the durable topic-id state is dropped, so the next `setup.sh`
-creates a fresh set of forum topics. Pass `--keep-state` only if you're
-reinstalling on the same supergroup and want to reuse the existing topics
-(otherwise you'd get duplicates, since Telegram has no list-topics API).
+By default the durable topic-id state is dropped AND the forum topics are
+deleted from Telegram (using the bot token + the recorded topic_id map, both
+read before deletion). Pass `--keep-state` only if you're reinstalling on the
+same supergroup and want to reuse the existing topics.
 
 The one thing it cannot remove is the Telegram side (forum topics in your
 supergroup) — a bot can't bulk-delete topics. Delete them by hand in Telegram,
