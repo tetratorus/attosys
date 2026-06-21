@@ -184,6 +184,8 @@ async def handle_get_updates(request):
     while True:
         ups = updates_for(thread_id, offset)
         if ups:
+            if ev:
+                ev.clear()
             return web.json_response({"ok": True, "result": ups})
         if ev is None:
             return web.json_response({"ok": True, "result": []})
