@@ -121,7 +121,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 ${ROOT}/mux/mux.py
+ExecStart=${ROOT}/venv/bin/python ${ROOT}/mux/mux.py
 Environment=ATTOSYS_ROOT=${ROOT}
 Environment=MUX_PORT=${MUX_PORT}
 WorkingDirectory=${ROOT}
