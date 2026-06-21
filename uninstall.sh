@@ -1,19 +1,21 @@
 #!/bin/bash
 # attosys uninstall — remove everything setup.sh + hire.py created on this host.
 #
-#   sudo ./uninstall.sh             # remove the runtime; keep the repo
+#   sudo ./uninstall.sh             # remove the runtime + durable state; keep repo
+#   sudo ./uninstall.sh --keep-state  # keep /var/lib/attosys (topic-id state, so
+#                                     # a reinstall reuses existing forum topics)
 #   sudo ./uninstall.sh --purge     # also delete /opt/attosys (the repo itself)
-#   sudo ./uninstall.sh --purge-state  # also drop /var/lib/attosys (topic-id
-#                                      # state, so a reinstall makes new topics)
 #   sudo ./uninstall.sh -y          # skip the confirmation prompt
 #
 # Idempotent: safe to rerun. Reads company.yaml if present to learn the org
 # slug + agents; otherwise infers them from installed systemd units so a
 # half-deleted install (or a missing company.yaml) can still be cleaned up.
 #
-# Durable state at /var/lib/attosys/<org>.yaml (chat_id + per-agent topic_ids)
-# is PRESERVED by default so a reinstall reuses your existing forum topics
-# instead of minting duplicates. Pass --purge-state to drop it too.
+# By default this is a true uninstall — a clean slate. Durable topic-id state
+# at /var/lib/attosys/<org>.yaml is dropped, so the next setup.sh creates a
+# fresh set of forum topics. Pass --keep-state if you're reinstalling on the
+# same supergroup and want to reuse the existing topics (otherwise you'd get
+# duplicates, since Telegram has no list-topics API).
 #
 # The one thing it cannot remove is the Telegram side (forum topics in your
 # supergroup) — a bot can't bulk-delete topics. Delete them by hand in Telegram
@@ -24,14 +26,14 @@ ROOT="$(pwd)"
 [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo ./uninstall.sh"; exit 1; }
 
 PURGE=0
-PURGE_STATE=0
+KEEP_STATE=0
 ASSUME_YES=0
 for arg in "$@"; do
   case "$arg" in
     --purge|-p) PURGE=1 ;;
-    --purge-state) PURGE_STATE=1 ;;
+    --keep-state) KEEP_STATE=1 ;;
     -y|--yes)   ASSUME_YES=1 ;;
-    -h|--help)  sed -n '2,18p' "$0"; exit 0 ;;
+    -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "unknown arg: $arg (try --help)"; exit 1 ;;
   esac
 done
@@ -63,6 +65,12 @@ done
 
 if [ ${#ORGS[@]} -eq 0 ]; then
   echo "no attosys install found (no company.yaml, no <org>-mux.service)."
+  # Still drop durable state by default — it may be the only leftover from a
+  # half-uninstalled attosys, and a "clean slate" must include it.
+  if [ "$KEEP_STATE" -ne 1 ] && [ -d /var/lib/attosys ]; then
+    rm -rf /var/lib/attosys
+    echo "  removed durable state: /var/lib/attosys/"
+  fi
   if [ "$PURGE" -eq 1 ]; then
     echo "--purge: removing $ROOT anyway"
     rm -rf "$ROOT"
@@ -79,10 +87,10 @@ if [ "$ASSUME_YES" -ne 1 ]; then
   echo "  - sudoers files: /etc/sudoers.d/<org>-<agent>"
   echo "  - generated state: venv/ harness/ proxy/ shared/ handbook.md company.yaml secrets.yaml"
   [ "$PURGE" -eq 1 ] && echo "  - the repo itself: $ROOT"
-  if [ "$PURGE_STATE" -eq 1 ]; then
-    echo "  - durable topic-id state: /var/lib/attosys/<org>.yaml (next install makes NEW topics)"
-  else
+  if [ "$KEEP_STATE" -eq 1 ]; then
     echo "  - keeping durable topic-id state at /var/lib/attosys/ (reinstall reuses topics)"
+  else
+    echo "  - durable topic-id state: /var/lib/attosys/<org>.yaml (next install makes NEW topics)"
   fi
   read -rp "Proceed? [y/N] " ans
   [[ "$ans" =~ ^[Yy] ]] || { echo "aborted"; exit 1; }
@@ -146,16 +154,18 @@ rm -rf "$ROOT/venv" "$ROOT/harness" "$ROOT/proxy" "$ROOT/shared" \
        "$ROOT/mux/__pycache__" "$ROOT/__pycache__"
 echo "  cleaned: venv/ harness/ proxy/ shared/ handbook.md company.yaml secrets.yaml"
 
-# --- durable topic-id state (preserved by default) --------------------------
-if [ "$PURGE_STATE" -eq 1 ]; then
-  for ORG in "${ORGS[@]}"; do
-    rm -f "/var/lib/attosys/${ORG}.yaml" 2>/dev/null && echo "  removed durable state: /var/lib/attosys/${ORG}.yaml"
-  done
-  rmdir /var/lib/attosys 2>/dev/null || true
-else
+# --- durable topic-id state (dropped by default; --keep-state preserves) -----
+if [ "$KEEP_STATE" -eq 1 ]; then
   for ORG in "${ORGS[@]}"; do
     [ -f "/var/lib/attosys/${ORG}.yaml" ] && echo "  kept durable state: /var/lib/attosys/${ORG}.yaml (reinstall reuses topics)"
   done
+else
+  # Nuke the whole directory, not just files for discovered orgs — catches
+  # orphan state from orgs whose units/config are already gone.
+  if [ -d /var/lib/attosys ]; then
+    rm -rf /var/lib/attosys
+    echo "  removed durable state: /var/lib/attosys/"
+  fi
 fi
 
 if [ "$PURGE" -eq 1 ]; then
