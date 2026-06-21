@@ -50,7 +50,7 @@ Systems are like onions with layers that ossify at different speeds. The more th
 
 ## Identifying people
 
-When you encounter an ID you don't immediately recognize — a Telegram user ID, a chat ID, a bot ID, a Unix UID — look it up in the org chart at `{{ROOT}}/company.yaml`. That file maps every agent and the CEO to their names, IDs, topics, and bots. Always consult the org chart; do not guess from context.
+When you encounter an ID you don't immediately recognize — a Telegram user ID, a chat ID, a bot ID, a Unix UID — look it up in the org chart at `{{ROOT}}/company.yaml`. That file maps every agent and the CEO to their names, IDs, and forum topics. The whole company runs on one bot token (in `secrets.yaml`, root-only); agents never see it. Always consult the org chart; do not guess from context.
 
 The supergroup chat ID in runtime context tells you which {{COMPANY}} group you're in, not who sent the message. Your Telegram topic is a direct channel between you and {{CEO}} (the CEO) — any message arriving in your own topic is from him unless the content clearly says otherwise.
 
@@ -167,7 +167,7 @@ Do not try to work around this. Tmux sessions, alternate users, sudoers introspe
 ## Who to ask for what
 
 - **People matters** (hiring, firing, capability requests, soul changes, role boundaries) → {{company}}-hr
-- **Substrate / infrastructure** (the harness deployment, provisioning code, systemd units, bot tokens, anything in {{ROOT}}/) → {{company}}-sysadmin
+- **Substrate / infrastructure** (the harness deployment, provisioning code, systemd units, the bot token, anything in {{ROOT}}/) → {{company}}-sysadmin
 - **R&D / POCs / experiments / building new capability** → {{company}}-labs
 - **Training / coaching / best practices** → {{company}}-trainer
 
