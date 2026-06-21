@@ -40,14 +40,9 @@ sudo ./setup.sh
 2. Walk you through configuration — org slug, your name + Telegram id, LLM
    provider/key, and one bot token — with the exact pages to get each value.
 3. **The one manual Telegram step** (a bot cannot create a group or list its
-    groups): make a supergroup with Topics enabled, and add your bot as admin.
-    attosys does everything else — finds the group, creates one topic per agent.
+   groups): make a supergroup with Topics enabled, and add your bot as admin.
+   attosys does everything else — finds the group, creates one topic per agent.
 4. Start the mux and the proxy, then hire the fleet.
-
-`setup.sh --clean` deletes the recorded set of forum topics and re-creates
-them, then re-hires the fleet against the new topic ids. Use it when the
-Telegram side has gotten messy (stray topics, manual edits). The mux and
-proxy keep running throughout.
 
 Each agent boots, reads the handbook, and checks in on its topic. Logs:
 `journalctl -u <org>-hr -f`.

@@ -135,26 +135,13 @@ def discover_chat():
         sys.exit(EXIT_NOT_READY)
 
 
-def create_topics(chat_id, clean=False):
+def create_topics(chat_id):
     """Create one forum topic per agent that lacks a topic_id.
-
-    With clean=True, first delete every topic recorded in durable state for
-    this org, then clear the in-memory topic_ids so they're recreated fresh.
-    This is the "nuke and redo topics" path — invoked by `setup.sh --clean`
-    when the user wants a fresh set (e.g. after manual topic edits, or
-    because the durable state points at deleted/stray topics).
 
     Common failures (bot not admin, bot kicked, Topics disabled) exit with
     EXIT_NOT_READY and a clear message so the user can fix the group and
     re-run setup.sh instead of hitting a traceback.
     """
-    if clean:
-        deleted = delete_durable_topics(chat_id)
-        if deleted:
-            print(f"  cleaned {deleted} old topic(s) from durable state")
-        for spec in (company.get("agents") or {}).values():
-            spec.pop("topic_id", None)
-
     changed = False
     for role, spec in (company.get("agents") or {}).items():
         if spec.get("topic_id"):
@@ -181,42 +168,15 @@ def create_topics(chat_id, clean=False):
     return changed, chat_id
 
 
-def delete_durable_topics(chat_id):
-    """Delete every forum topic recorded in durable state for this org.
-    Returns the count actually deleted. Telegram has no list-topics API, so
-    we can only delete what we previously recorded — that's the contract."""
-    state_file = STATE_DIR / f"{ORG}.yaml"
-    if not state_file.exists():
-        return 0
-    try:
-        st = yaml.safe_load(state_file.read_text()) or {}
-    except Exception:
-        return 0
-    deleted = 0
-    for role, tid in (st.get("agents") or {}).items():
-        if not tid:
-            continue
-        try:
-            call("deleteForumTopic", data={"chat_id": chat_id, "message_thread_id": int(tid)})
-            print(f"  deleted old topic {ORG}-{role} ({tid})")
-            deleted += 1
-        except RuntimeError as e:
-            # topic already gone / chat changed — fine, we're cleaning up
-            print(f"  skip old topic {ORG}-{role} ({tid}): {e}")
-    return deleted
-
-
 def main():
-    clean = "--clean" in sys.argv
     validate_bot()
-    if not clean:
-        merge_durable_state()      # reuse chat_id + topic_ids from a prior install
+    merge_durable_state()          # reuse chat_id + topic_ids from a prior install
     chat_id = discover_chat()
     company["telegram_chat_id"] = chat_id
     # Persist chat_id immediately so a crash in create_topics (or a Ctrl-C)
     # doesn't lose it and force re-discovery on the next run.
     COMPANY.write_text(yaml.safe_dump(company, sort_keys=False, allow_unicode=True))
-    changed, chat_id = create_topics(chat_id, clean=clean)
+    changed, chat_id = create_topics(chat_id)
     COMPANY.write_text(yaml.safe_dump(company, sort_keys=False, allow_unicode=True))
     save_durable_state(chat_id)    # mirror so a reinstall reuses these topics
     print(f"wrote {COMPANY} (chat_id + {('new ' if changed else 'no new ')}topic_ids)")
