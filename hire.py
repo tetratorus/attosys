@@ -119,7 +119,14 @@ for role in sys.argv[1:]:
     H = pathlib.Path("/home") / agent
     A, S = H / "agent", H / "subconscious"
     if (A / "config.json").exists():
-        sys.exit(f"{agent}: already provisioned ({A}/config.json exists)")
+        # config.json is the commit marker, but it's written before the
+        # service is started, so a prior run may have failed partway. Only
+        # skip when the agent is actually running; otherwise fall through and
+        # re-provision (every write below is idempotent / overwriting).
+        if subprocess.run(["systemctl", "is-active", "--quiet", f"{agent}.service"]).returncode == 0:
+            print(f"{agent}: already provisioned and running, skip")
+            continue
+        print(f"{agent}: resuming partial provision (config.json present, service not active)")
 
     if not H.exists():
         subprocess.run(["useradd", "-m", "-s", "/bin/bash", agent], check=True)
@@ -145,14 +152,17 @@ for role in sys.argv[1:]:
     (A / "SOUL.md").write_text(render(f"templates/souls/{spec.get('soul', role)}.md", agent))
     (A / "MEMORY.md").write_text("")
 
-    shutil.copytree(ROOT / "harness" / "opt" / "subconscious", S)
+    shutil.copytree(ROOT / "harness" / "opt" / "subconscious", S, dirs_exist_ok=True)
     # Route the subconscious through the proxy under its own tag (<agent>-sub)
     # so its token spend logs separately from the primary's and is filterable.
     sub_api_base = (f"{PROXY_URL.rstrip('/')}/{agent}-sub/{PROVIDER}/v1"
                     if PROXY_URL and PROVIDER else cfg["api_base"])
     (S / "config.json").write_text(json.dumps(
         {"api_key": cfg["api_key"], "api_base": sub_api_base,
-         "model": cfg["model"], "context_tokens": cfg["context_tokens"]}, indent=2) + "\n")
+         "model": cfg["model"], "context_tokens": cfg["context_tokens"],
+         # The subconscious SOUL uses NUDGE + PRUNE; the harness copies these
+         # from harness/opt/tools/ into <subconscious>/tools/ on boot.
+         "opt": ["tools/nudge", "tools/stash_messages"]}, indent=2) + "\n")
     (S / "MEMORY.md").write_text("# Subconscious Memory\n\nNo findings yet.\n")
 
     # home traversable by the company group (mail drops), not listable;

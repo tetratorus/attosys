@@ -25,8 +25,10 @@ mux_url: http://127.0.0.1:8811
 
 # LLM provider. Agents send requests through the local llm proxy (per-agent
 # request logging), which forwards to the provider named here. `provider` is
-# the proxy's prefix for your upstream: kimi (moonshot), deepseek, openai,
-# claude, xai, gemini, openrouter.
+# the proxy's prefix for your upstream: kimi (moonshot), deepseek, zhipu,
+# openai, claude, xai, gemini, openrouter. Leave provider/proxy_url unset to
+# talk to api_base directly (no logging — use for custom OpenAI-compatible
+# endpoints the proxy doesn't know about).
 provider: kimi
 model: kimi-k2.6
 proxy_url: http://127.0.0.1:8810

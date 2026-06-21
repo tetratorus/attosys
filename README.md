@@ -96,3 +96,21 @@ token — and there are no per-agent bots to mint or manage.
 - **Firing** is deliberately manual: collect a handover,
   `systemctl disable --now <org>-<role>`, archive `/home/<org>-<role>`, remove
   the unit, the sudoers file if any, and the org-chart entry.
+
+## Uninstall
+
+Remove everything `setup.sh` + `hire.py` created on the host — systemd units,
+agent unix users + homes, the shared group, sudoers files, and generated state
+(`venv/`, `harness/`, `proxy/`, `shared/`, `handbook.md`, `company.yaml`,
+`secrets.yaml`). Idempotent; reads `company.yaml` for the org + agents, or
+infers them from installed units if the config is already gone.
+
+```bash
+sudo ./uninstall.sh             # remove the runtime; keep the repo
+sudo ./uninstall.sh --purge     # also delete /opt/attosys itself
+sudo ./uninstall.sh -y          # skip the confirmation prompt
+```
+
+The one thing it cannot remove is the Telegram side (forum topics in your
+supergroup) — a bot can't bulk-delete topics. Delete them by hand in Telegram,
+or just leave the supergroup.
