@@ -4,6 +4,7 @@
 # can also be run standalone. Run as root.
 set -euo pipefail
 cd "$(dirname "$0")"
+export DEBIAN_FRONTEND=noninteractive   # silence debconf whiptail in non-tty shells
 
 # llm proxy. Allows hyphens in agent tags so attosys unix names (acme-hr) route
 # as /<agent>/<provider>/v1.
@@ -22,6 +23,12 @@ if ! command -v node >/dev/null 2>&1; then
   echo "installing Node.js..."
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y -qq nodejs
+fi
+# On some distros (e.g. Ubuntu's nodejs apt package) npm is a separate
+# package and isn't pulled in by node. npm is required for `npm install` below.
+if ! command -v npm >/dev/null 2>&1; then
+  echo "installing npm..."
+  apt-get install -y -qq npm
 fi
 apt-get install -y -qq build-essential python3 >/dev/null  # native better-sqlite3 build
 

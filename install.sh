@@ -4,6 +4,7 @@
 # upstream default branch.
 set -euo pipefail
 cd "$(dirname "$0")"
+export DEBIAN_FRONTEND=noninteractive   # silence debconf whiptail in non-tty shells
 
 # Agent harness. Carries telegram_api_base (so agents route Telegram through
 # the local mux) and spawns each extra dir (the subconscious) as its own
