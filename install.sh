@@ -25,6 +25,10 @@ git -C harness pull -q --ff-only origin "$ATTOBOT_BRANCH"
 
 [ -d venv ] || python3 -m venv venv
 venv/bin/pip install -q -r harness/requirements.txt
+# OCR tool (harness/opt/tools/ocr_image.py) is auto-loaded by every agent
+# but its deps aren't in harness/requirements.txt. Install them here so the
+# tool registers instead of silently failing at import cv2 / rapidocr.
+venv/bin/pip install -q rapidocr-onnxruntime opencv-python-headless
 # Mux deps (aiohttp) — shares the harness venv so the mux unit can run as
 # venv/bin/python with all its requirements satisfied.
 venv/bin/pip install -q -r mux/requirements.txt
