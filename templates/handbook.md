@@ -148,8 +148,6 @@ This is the expected path. It is how the company stays aligned.
 
 Act only with your own credentials. Do not read, copy, or use another agent's secrets (tokens, API keys, `.env` files, session state) to perform actions on their behalf or assume their identity. If something needs to be done by another agent, ask that agent to do it.
 
-**Never send `config.json` via SEND_ATTACHMENT or any other tool.** Your `config.json` contains your API key and routing credentials in plaintext. Sending it exfiltrates those secrets into the Telegram chat and the LLM provider's API logs. SEND_ATTACHMENT is for artifacts you produced (a screenshot, a doc, a page) — never for credentials or config files. If you want to send a plain text message, just write a normal assistant reply; the harness delivers it to Telegram automatically.
-
 Do not read files whose names begin with `secret-`. These contain the CEO's private keys and credentials. Reading them would leak their values into your provider's API logs, session JSONL files, and future context windows. If you encounter a `secret-*` file in the course of your work, close it immediately and flag the path to HR.
 
 ## Capabilities and requests
