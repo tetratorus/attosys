@@ -1,11 +1,22 @@
 #!/bin/bash
 # attosys setup — one command, bare Ubuntu to a running agent-only company.
-#   sudo ./setup.sh
+#   sudo ./setup.sh             # install / re-run (reuses existing topics)
+#   sudo ./setup.sh --clean     # delete recorded topics, create a fresh set,
+#                               # re-hire. Use when the Telegram side is messy.
 # Idempotent: re-run any time. Skips steps already done.
 set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(pwd)"
 [ "$(id -u)" -eq 0 ] || { echo "run as root: sudo ./setup.sh"; exit 1; }
+
+CLEAN=0
+for arg in "$@"; do
+  case "$arg" in
+    --clean) CLEAN=1 ;;
+    -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
+    *) echo "unknown arg: $arg (try --help)"; exit 1 ;;
+  esac
+done
 
 # --- 1. deps + harness venv -------------------------------------------------
 ./install.sh
@@ -102,7 +113,11 @@ sleep 1  # let the mux's in-flight getUpdates connection close
 # start the mux and proxy (they don't need the group), but defer hiring
 # until the user re-runs setup.sh with the group ready.
 set +e
-./seed.py
+if [ "$CLEAN" -eq 1 ]; then
+  ./seed.py --clean
+else
+  ./seed.py
+fi
 SEED_RC=$?
 set -e
 if [ "$SEED_RC" -eq 2 ]; then
@@ -172,6 +187,26 @@ if [ "$TG_READY" -eq 0 ]; then
   echo "  3. Re-run: sudo ./setup.sh"
   echo "The mux and proxy are already running and will pick up the group on re-run."
   exit 0
+fi
+
+if [ "$CLEAN" -eq 1 ]; then
+  # Tear down existing agent services + homes so hire.py provisions fresh
+  # against the new topic ids. The mux + proxy stay up.
+  echo "=== --clean: tearing down existing agents for re-hire ==="
+  python3 -c "
+import yaml
+c=yaml.safe_load(open('company.yaml'))
+print(' '.join((c.get('agents') or {}).keys()))" | tr ' ' '\n' | while read -r role; do
+    agent="${ORG}-${role}"
+    systemctl disable --now "${agent}.service" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${agent}.service"
+    rm -f "/etc/sudoers.d/${agent}" 2>/dev/null || true
+    if id "$agent" >/dev/null 2>&1; then
+      userdel -r "$agent" 2>/dev/null || rm -rf "/home/$agent" 2>/dev/null || true
+    fi
+    echo "  tore down $agent"
+  done
+  systemctl daemon-reload
 fi
 
 ./hire.py hr sysadmin labs trainer
