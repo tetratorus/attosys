@@ -111,13 +111,14 @@ def tag_outbound(method, ctype, body, tag):
 
 
 def updates_for(thread_id, offset):
-    """Return updates for *thread_id* with update_id > *offset*, and prune
-    consumed entries (update_id <= offset) from the buffer. Single-threaded
-    event loop — no lock needed."""
+    """Return updates for *thread_id* with update_id >= *offset* (Telegram's
+    getUpdates semantics: offset is the first update_id to return, not the
+    last to exclude), and prune consumed entries (< offset) from the buffer.
+    Single-threaded event loop — no lock needed."""
     buf = BUFFERS.get(thread_id)
     if not buf:
         return []
-    kept = [u for u in buf if u["update_id"] > offset]
+    kept = [u for u in buf if u["update_id"] >= offset]
     BUFFERS[thread_id] = kept
     return kept
 
@@ -157,7 +158,12 @@ async def reloader():
     """Pick up agents hired after startup, independent of poll cadence."""
     while True:
         await asyncio.sleep(3)
-        refresh_topics()
+        try:
+            refresh_topics()
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f'[mux] reloader error: {e}', flush=True)
 
 
 # ---------- HTTP handlers ----------
