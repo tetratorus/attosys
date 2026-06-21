@@ -25,5 +25,8 @@ git -C harness pull -q --ff-only origin "$ATTOBOT_BRANCH"
 
 [ -d venv ] || python3 -m venv venv
 venv/bin/pip install -q -r harness/requirements.txt
+# Mux deps (aiohttp) — shares the harness venv so the mux unit can run as
+# venv/bin/python with all its requirements satisfied.
+venv/bin/pip install -q -r mux/requirements.txt
 
 echo "install ok. Next: sudo ./setup.sh"

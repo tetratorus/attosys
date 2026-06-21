@@ -52,7 +52,6 @@ COMPANY_FILE = ROOT / "company.yaml"
 THREAD_OF = {}                 # agent name -> thread id (reloaded when company.yaml changes)
 BUFFERS = {}                   # thread id -> list of update dicts
 EVENTS = {}                    # thread id -> asyncio.Event (set when new updates arrive)
-_bg_tasks = set()              # strong refs to background asyncio tasks (prevent GC)
 _mtime = 0
 
 
@@ -133,18 +132,26 @@ async def poll_loop(session):
                     data={"offset": offset, "timeout": POLL_TIMEOUT},
                     timeout=aiohttp.ClientTimeout(total=POLL_TIMEOUT + 20)) as r:
                 data = await r.json()
-            for u in data.get("result", []):
+            ups = data.get("result", [])
+            if ups:
+                print(f"[mux:debug] poll got {len(ups)} updates, offset={offset}", flush=True)
+            for u in ups:
                 offset = u["update_id"] + 1
                 msg = u.get("message") or {}
-                if str((msg.get("chat") or {}).get("id") or "") != CHAT_ID:
+                msg_cid = str((msg.get("chat") or {}).get("id") or "")
+                if msg_cid != CHAT_ID:
+                    print(f"[mux:debug] drop: chat {msg_cid} != {CHAT_ID}", flush=True)
                     continue
                 tid = msg.get("message_thread_id")
                 if tid is None:
+                    print(f"[mux:debug] drop: no topic", flush=True)
                     continue
                 tid = int(tid)
                 if tid not in BUFFERS:
-                    continue  # not a topic any agent owns
+                    print(f"[mux:debug] drop: topic {tid} not in BUFFERS (have {list(BUFFERS.keys())})", flush=True)
+                    continue
                 BUFFERS[tid].append(u)
+                print(f"[mux:debug] buffered update {u['update_id']} for topic {tid}, buf len={len(BUFFERS[tid])}", flush=True)
                 ev = EVENTS.get(tid)
                 if ev is not None:
                     ev.set()
@@ -184,19 +191,16 @@ async def handle_get_updates(request):
     while True:
         ups = updates_for(thread_id, offset)
         if ups:
+            print(f"[mux:debug] serving {len(ups)} updates to {agent} (offset={offset})", flush=True)
             return web.json_response({"ok": True, "result": ups})
         if ev is None:
             return web.json_response({"ok": True, "result": []})
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            if ev:
-                ev.clear()
             return web.json_response({"ok": True, "result": []})
         try:
             await asyncio.wait_for(ev.wait(), timeout=remaining)
         except asyncio.TimeoutError:
-            if ev:
-                ev.clear()
             return web.json_response({"ok": True, "result": []})
         ev.clear()
 
@@ -271,19 +275,22 @@ async def main():
     await site.start()
 
     # Background tasks: the single Telegram poll loop + company.yaml reloader.
-    # Stored in a module-level set for strong references — asyncio only holds
-    # weak refs, so unreferenced tasks get garbage-collected silently.
-    for coro, name in [(poll_loop(app["session"]), "poll"), (reloader(), "reload")]:
-        t = asyncio.create_task(coro, name=name)
-        _bg_tasks.add(t)
-        t.add_done_callback(_bg_tasks.discard)
+    # Keep strong references — asyncio only holds weak refs, so unreferenced
+    # tasks get garbage-collected silently mid-execution.
+    app["tasks"] = [
+        asyncio.create_task(poll_loop(app["session"]), name="poll"),
+        asyncio.create_task(reloader(), name="reload"),
+    ]
+    for t in app["tasks"]:
+        t.add_done_callback(lambda task: print(
+            f"[mux] task {task.get_name()} exited: {task.exception() or 'clean'}", flush=True))
 
     # Keep the server running forever.
     try:
         while True:
             await asyncio.sleep(3600)
     finally:
-        for t in list(_bg_tasks):
+        for t in app.get("tasks", []):
             t.cancel()
         await app["session"].close()
         await runner.cleanup()
