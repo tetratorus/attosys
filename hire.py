@@ -136,6 +136,11 @@ for role in sys.argv[1:]:
 
     for d in (A, A / "memory", A / "triggers", A / "mail_inbox"):
         d.mkdir(parents=True, exist_ok=True)
+    # Convention dirs the handbook treats as load-bearing — pre-create so the
+    # agent doesn't hit "directory doesn't exist" on first write.
+    (H / "skills").mkdir(exist_ok=True)
+    (H / "incidents").mkdir(exist_ok=True)
+    (H / "TODO.md").touch(exist_ok=True)
 
     api_base = (f"{PROXY_URL.rstrip('/')}/{agent}/{PROVIDER}/v1" if PROXY_URL and PROVIDER
                 else company.get("api_base", "https://api.moonshot.ai/v1"))
@@ -170,6 +175,10 @@ for role in sys.argv[1:]:
     os.chown(H, u.pw_uid, gid); os.chmod(H, 0o2710)
     chownr(A, u.pw_uid, gid, 0o2750, 0o640)
     chownr(S, u.pw_uid, gid_self, 0o750, 0o640)
+    # Convention dirs in the home workspace — agent-owned, not group-readable
+    for d in (H / "skills", H / "incidents"):
+        os.chown(d, u.pw_uid, gid_self); os.chmod(d, 0o750)
+    os.chown(H / "TODO.md", u.pw_uid, gid_self); os.chmod(H / "TODO.md", 0o640)
     os.chmod(A / "config.json", 0o600)
     os.chmod(S / "config.json", 0o600)
     os.chmod(A / "mail_inbox", 0o2770)
