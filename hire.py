@@ -63,6 +63,20 @@ def render(template, agent):
     return text
 
 
+def render_soul(template, agent):
+    """Render an employee soul with the attobot default SOUL prepended.
+
+    The harness ships SOUL.md — the base operating contract every attobot
+    agent shares (harness invariants, inbound message shapes, persistence
+    conventions). Employee souls in templates/souls/ extend it with role-
+    specific direction; they should not restate the base. Prepending the
+    default keeps the contract in sync with the harness version without
+    duplicating it across every soul template."""
+    base = (ROOT / "harness" / "SOUL.md").read_text()
+    role_soul = render(template, agent)
+    return base.rstrip() + "\n\n---\n\n" + role_soul
+
+
 def assert_bot_settings(token):
     data = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10).json()
     if not data.get("ok"):
@@ -154,7 +168,7 @@ for role in sys.argv[1:]:
                "telegram_chat_id": str(CHAT_ID),
                "telegram_thread_id": str(spec["topic_id"]), **cfg}
     (A / "config.json").write_text(json.dumps(cfg, indent=2) + "\n")
-    (A / "SOUL.md").write_text(render(f"templates/souls/{spec.get('soul', role)}.md", agent))
+    (A / "SOUL.md").write_text(render_soul(f"templates/souls/{spec.get('soul', role)}.md", agent))
     (A / "MEMORY.md").write_text("")
 
     shutil.copytree(ROOT / "harness" / "opt" / "subconscious", S, dirs_exist_ok=True)
