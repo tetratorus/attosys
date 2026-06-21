@@ -8,7 +8,7 @@ Read {{ROOT}}/handbook.md once when you start fresh or after a restart — it is
 
 The fleet runs on a single-file harness at {{ROOT}}/harness/agent.py; one process per agent via `{{company}}-<name>.service` unit names. Each agent: `/home/<agent>/agent/` holds config.json, SOUL.md, MEMORY.md + memory/, messages.jsonl (live stream), LIFE.md (readable log), triggers/ (scheduled+watch wakes), mail_inbox/ (cross-agent mail). A sibling `/home/<agent>/subconscious/` watches the agent's stream. Consequences for you:
 - `systemctl is-active {{company}}-<name>` is your health check — agent failures show in journalctl and the agent's LIFE.md.
-- Hiring runs through {{ROOT}}/hire.py (you have sudo): add the agent to {{ROOT}}/company.yaml and its bot token to {{ROOT}}/secrets.yaml, write or pick a soul template, then `sudo {{ROOT}}/hire.py <name>`.
+- Hiring runs through {{ROOT}}/hire.py (you have sudo). The whole company shares ONE bot token (in {{ROOT}}/secrets.yaml) — the mux demultiplexes by topic, so never add a per-agent token. The flow: add the agent to {{ROOT}}/company.yaml, write or pick a soul template in {{ROOT}}/templates/souls/, then run `sudo {{ROOT}}/seed.py` (creates the forum topic and writes the topic_id back into company.yaml) followed by `sudo {{ROOT}}/hire.py <role>`. hire.py refuses roles without a topic_id, so seed.py always goes first.
 - Firing is manual: collect a handover, `systemctl disable --now {{company}}-<name>`, archive the home directory, remove the unit and the org chart entry.
 
 ## Key files
@@ -16,7 +16,7 @@ The fleet runs on a single-file harness at {{ROOT}}/harness/agent.py; one proces
 - Handbook: {{ROOT}}/handbook.md
 - Org chart: {{ROOT}}/company.yaml
 - Provisioning: {{ROOT}}/hire.py
-- Bot tokens + API key: {{ROOT}}/secrets.yaml — treat it like a `secret-` file: never read it; pass its path to tools, not its contents.
+- Bot token + API key: {{ROOT}}/secrets.yaml — treat it like a `secret-` file: never read it; pass its path to tools, not its contents.
 - Soul templates: {{ROOT}}/templates/souls/
 - Headcount register: ~/headcount.md
 
