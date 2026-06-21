@@ -14,12 +14,11 @@ Idempotent: agents that already have a topic_id are skipped; an existing
 telegram_chat_id is reused.
 
 Durable state: chat_id + per-agent topic_ids are also mirrored to
-/var/lib/attosys/<org>.yaml, which survives `uninstall.sh` (that deletes
-company.yaml). This prevents duplicate topics on reinstall — without it,
-a re-setup against the same supergroup would create a second set of topics
-because Telegram has no "list topics" API and createForumTopic doesn't fail
-on duplicate names. Delete that file (or the whole /var/lib/attosys) to
-force fresh topic creation.
+/var/lib/attosys/<org>.yaml. uninstall.sh drops this by default (true clean
+slate); --keep-state preserves it so a reinstall reuses existing forum
+topics instead of minting duplicates (Telegram has no "list topics" API
+and createForumTopic doesn't fail on duplicate names). Delete that file
+(or the whole /var/lib/attosys) to force fresh topic creation.
 """
 import json
 import os
