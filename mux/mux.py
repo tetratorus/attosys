@@ -52,7 +52,6 @@ COMPANY_FILE = ROOT / "company.yaml"
 THREAD_OF = {}                 # agent name -> thread id (reloaded when company.yaml changes)
 BUFFERS = {}                   # thread id -> list of update dicts
 EVENTS = {}                    # thread id -> asyncio.Event (set when new updates arrive)
-_bg_tasks = set()              # strong refs to background asyncio tasks (prevent GC)
 _mtime = 0
 
 
@@ -111,10 +110,9 @@ def tag_outbound(method, ctype, body, tag):
 
 
 def updates_for(thread_id, offset):
-    """Return updates for *thread_id* with update_id >= *offset* (Telegram's
-    getUpdates semantics: offset is the first update_id to return, not the
-    last to exclude), and prune consumed entries (< offset) from the buffer.
-    Single-threaded event loop — no lock needed."""
+    """Return updates for *thread_id* with update_id >= *offset*, and prune
+    consumed entries (update_id < offset) from the buffer. Single-threaded
+    event loop — no lock needed."""
     buf = BUFFERS.get(thread_id)
     if not buf:
         return []
@@ -134,18 +132,26 @@ async def poll_loop(session):
                     data={"offset": offset, "timeout": POLL_TIMEOUT},
                     timeout=aiohttp.ClientTimeout(total=POLL_TIMEOUT + 20)) as r:
                 data = await r.json()
-            for u in data.get("result", []):
+            ups = data.get("result", [])
+            if ups:
+                print(f"[mux:debug] poll got {len(ups)} updates, offset={offset}", flush=True)
+            for u in ups:
                 offset = u["update_id"] + 1
                 msg = u.get("message") or {}
-                if str((msg.get("chat") or {}).get("id") or "") != CHAT_ID:
+                msg_cid = str((msg.get("chat") or {}).get("id") or "")
+                if msg_cid != CHAT_ID:
+                    print(f"[mux:debug] drop: chat {msg_cid} != {CHAT_ID}", flush=True)
                     continue
                 tid = msg.get("message_thread_id")
                 if tid is None:
+                    print(f"[mux:debug] drop: no topic", flush=True)
                     continue
                 tid = int(tid)
                 if tid not in BUFFERS:
-                    continue  # not a topic any agent owns
+                    print(f"[mux:debug] drop: topic {tid} not in BUFFERS (have {list(BUFFERS.keys())})", flush=True)
+                    continue
                 BUFFERS[tid].append(u)
+                print(f"[mux:debug] buffered update {u['update_id']} for topic {tid}, buf len={len(BUFFERS[tid])}", flush=True)
                 ev = EVENTS.get(tid)
                 if ev is not None:
                     ev.set()
@@ -190,21 +196,16 @@ async def handle_get_updates(request):
     while True:
         ups = updates_for(thread_id, offset)
         if ups:
-            if ev:
-                ev.clear()
+            print(f"[mux:debug] serving {len(ups)} updates to {agent} (offset={offset})", flush=True)
             return web.json_response({"ok": True, "result": ups})
         if ev is None:
             return web.json_response({"ok": True, "result": []})
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            if ev:
-                ev.clear()
             return web.json_response({"ok": True, "result": []})
         try:
             await asyncio.wait_for(ev.wait(), timeout=remaining)
         except asyncio.TimeoutError:
-            if ev:
-                ev.clear()
             return web.json_response({"ok": True, "result": []})
         ev.clear()
 
@@ -247,10 +248,10 @@ async def handle_file(request):
         return web.json_response({"ok": False, "description": f"unknown agent: {agent}"}, status=403)
     file_path = request.match_info["path"]
     session = request.app["session"]
-    async with session.get(f"{UPSTREAM}/bot{TOKEN}/getFile?file_id={file_path}",
+    async with session.get(f"{UPSTREAM}/file/bot{TOKEN}/{file_path}",
                            timeout=aiohttp.ClientTimeout(total=60)) as r:
-        data = await r.json()
-    return web.json_response(data, status=r.status)
+        data = await r.read()
+    return web.Response(body=data, content_type=r.content_type)
 
 
 # We need `web` imported; aiohttp.web is the standard alias.
@@ -270,7 +271,7 @@ async def main():
     # call. Paths: /bot<agent>/<method>  and  /file/bot<agent>/<path>
     app.router.add_post("/bot{agent}/getUpdates", handle_get_updates)
     app.router.add_post("/bot{agent}/getMe", handle_get_me)
-    app.router.add_post("/bot{agent}/{method:.*}", handle_forward)
+    app.router.add_route("*", "/bot{agent}/{method:.*}", handle_forward)
     app.router.add_get("/file/bot{agent}/{path:.*}", handle_file)
 
     runner = web.AppRunner(app)
@@ -278,13 +279,21 @@ async def main():
     site = web.TCPSite(runner, "127.0.0.1", PORT)
     await site.start()
 
-    # Background tasks: the single Telegram poll loop + company.yaml reloader.
-    # Stored in a module-level set for strong references — asyncio only holds
-    # weak refs, so unreferenced tasks get garbage-collected silently.
+    # Background tasks — set BEFORE site.start() to avoid aiohttp 3.14 deprecation
+    _bg_tasks = set()
     for coro, name in [(poll_loop(app["session"]), "poll"), (reloader(), "reload")]:
         t = asyncio.create_task(coro, name=name)
         _bg_tasks.add(t)
         t.add_done_callback(_bg_tasks.discard)
+
+    # Signal handlers for crash diagnostics
+    import signal
+    def _log_signal(signum, frame):
+        import os, traceback
+        print(f"[mux] received signal {signum} ({signal.Signals(signum).name})", flush=True)
+        traceback.print_stack(frame)
+    signal.signal(signal.SIGTERM, _log_signal)
+    signal.signal(signal.SIGINT, _log_signal)
 
     # Keep the server running forever.
     try:
