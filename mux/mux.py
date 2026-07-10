@@ -87,8 +87,10 @@ def refresh_topics():
 def tag_outbound(method, ctype, body, tag):
     """Prefix the agent's name onto outbound message text/captions, so every
     message in Telegram is attributable to its agent and a routing mistake
-    shows up as the wrong [name] instead of being invisible. Rewrites
-    form-urlencoded and JSON sends; multipart media uploads pass through."""
+    shows up as the wrong <name> instead of being invisible. Angle brackets,
+    not square: Telegram's legacy Markdown parser eats [x] when a message is
+    sent with parse_mode=Markdown; <x> survives. Rewrites form-urlencoded and
+    JSON sends; multipart media uploads pass through."""
     if not method.startswith("send"):
         return body, ctype
     try:
@@ -96,13 +98,13 @@ def tag_outbound(method, ctype, body, tag):
             d = json.loads(body or b"{}")
             for k in ("text", "caption"):
                 if d.get(k) is not None:
-                    d[k] = f"[{tag}] {d[k]}"
+                    d[k] = f"<{tag}> {d[k]}"
                     return json.dumps(d).encode(), ctype
         elif ctype.startswith("application/x-www-form-urlencoded") or not ctype:
             items = parse_qsl(body.decode(), keep_blank_values=True)
             for i, (k, v) in enumerate(items):
                 if k in ("text", "caption"):
-                    items[i] = (k, f"[{tag}] {v}")
+                    items[i] = (k, f"<{tag}> {v}")
                     return urlencode(items).encode(), "application/x-www-form-urlencoded"
     except Exception:
         pass
@@ -264,7 +266,7 @@ async def main():
         print("[mux] no agents with topic_id in company.yaml yet — will pick them up as they're hired", flush=True)
     print(f"[mux] {len(THREAD_OF)} agents, chat {CHAT_ID}, listening on 127.0.0.1:{PORT}", flush=True)
 
-    app = web.Application()
+    app = web.Application(client_max_size=5*1024*1024)  # 5MB
     app["session"] = aiohttp.ClientSession()
 
     # Routes. The agent segment carries the routing key; method is the Bot API
