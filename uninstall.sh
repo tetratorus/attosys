@@ -167,6 +167,12 @@ echo "  cleaned: venv/ harness/ proxy/ shared/ handbook.md company.yaml secrets.
 # Telegram has no list-topics API, so we can only delete what we recorded.
 # --keep-state skips this (topics stay for reuse on reinstall). Done before
 # nuking /var/lib/attosys so we still have the topic_id map.
+#
+# NOTE: closeForumTopic fails on topics with messages — the messages must be
+# deleted first before the topic can be closed. This script uses
+# deleteForumTopic (which deletes the topic AND all its messages in one call).
+# If deleteForumTopic fails, the topic may have messages that the bot cannot
+# bulk-delete — the user will need to clear them manually via Telegram UI.
 if [ "$KEEP_STATE" -ne 1 ] && [ -n "$BOT_TOKEN" ]; then
   for ORG in "${ORGS[@]}"; do
     state_file="/var/lib/attosys/${ORG}.yaml"
@@ -178,17 +184,32 @@ import sys, urllib.request, urllib.parse, yaml
 token, chat_id, state_file = sys.argv[1], sys.argv[2], sys.argv[3]
 st = yaml.safe_load(open(state_file)) or {}
 deleted = 0
+failed = []
 for role, tid in (st.get("agents") or {}).items():
     if not tid: continue
     url = f"https://api.telegram.org/bot{token}/deleteForumTopic"
     data = urllib.parse.urlencode({"chat_id": chat_id, "message_thread_id": int(tid)}).encode()
     try:
         r = urllib.request.urlopen(url, data, timeout=15).read().decode()
-        import json; ok = json.loads(r).get("ok")
-        if ok: deleted += 1; print(f"  deleted topic {role} ({tid})")
+        import json; j = json.loads(r)
+        if j.get("ok"):
+            deleted += 1
+            print(f"  deleted topic {role} ({tid})")
+        else:
+            desc = j.get("description", "unknown error")
+            # Common failure: topic has messages that prevent deletion
+            failed.append(f"{role} ({tid}): {desc}")
     except Exception as e:
-        print(f"  skip topic {role} ({tid}): {e}")
-if deleted: print(f"  removed {deleted} forum topic(s) for org {st.get('org')}")
+        failed.append(f"{role} ({tid}): {e}")
+if failed:
+    print(f"  WARNING: {len(failed)} topic(s) could not be deleted:")
+    for f in failed:
+        print(f"    - {f}")
+    print("  Messages in these topics may block deletion. Open the supergroup")
+    print("  in Telegram, delete any remaining messages, then rerun uninstall")
+    print("  or remove the empty topics manually via the topic management UI.")
+if deleted:
+    print(f"  removed {deleted} forum topic(s) for org {st.get('org')}")
 PY
   done
 fi
