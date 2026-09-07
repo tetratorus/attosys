@@ -78,7 +78,7 @@ def render_soul(template, agent):
 
 
 def assert_bot_settings(token):
-    data = requests.get(f"https://api.telegram.org/bot{token}/getMe", timeout=10).json()
+    data = requests.get(f"{company.get('telegram_api_base', 'https://api.telegram.org')}/bot{token}/getMe", timeout=10).json()
     if not data.get("ok"):
         sys.exit(f"getMe failed: {data}")
     bot = data["result"]
@@ -161,28 +161,38 @@ for role in sys.argv[1:]:
     cfg = {"api_key": secrets["api_key"],
            "api_base": api_base,
            "model": company.get("model", "kimi-k2.6"),
-           "context_tokens": company.get("context_tokens", 100000)}
+           "context_tokens": company.get("context_tokens", 100000),
+           **company.get("agent_config", {}), **spec.get("config", {})}
+    if company.get("llm_env_file"):
+        cfg.pop("api_key", None)
     if chatful:
         cfg = {"telegram_token": agent,            # routing key for the mux
                "telegram_api_base": MUX_URL,
                "telegram_chat_id": str(CHAT_ID),
                "telegram_thread_id": str(spec["topic_id"]), **cfg}
     (A / "config.json").write_text(json.dumps(cfg, indent=2) + "\n")
-    (A / "SOUL.md").write_text(render_soul(f"templates/souls/{spec.get('soul', role)}.md", agent))
-    (A / "MEMORY.md").write_text("")
+    if not (A / "SOUL.md").exists():
+        (A / "SOUL.md").write_text(render_soul(f"templates/souls/{spec.get('soul', role)}.md", agent))
+    (A / "MEMORY.md").touch(exist_ok=True)
 
-    shutil.copytree(ROOT / "harness" / "opt" / "subconscious", S, dirs_exist_ok=True)
+    skeleton = ROOT / "harness" / "opt" / "subconscious"
+    for source in skeleton.rglob("*"):
+        target = S / source.relative_to(skeleton)
+        if source.is_file() and not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(source, target)
     # Route the subconscious through the proxy under its own tag (<agent>-sub)
     # so its token spend logs separately from the primary's and is filterable.
     sub_api_base = (f"{PROXY_URL.rstrip('/')}/{agent}-sub/{PROVIDER}/v1"
                     if PROXY_URL and PROVIDER else cfg["api_base"])
     (S / "config.json").write_text(json.dumps(
-        {"api_key": cfg["api_key"], "api_base": sub_api_base,
-         "model": cfg["model"], "context_tokens": cfg["context_tokens"],
+        {**{key: value for key, value in cfg.items() if not key.startswith("telegram")},
+         "api_base": sub_api_base, "primary_dir": str(A),
          # The subconscious SOUL uses NUDGE + PRUNE; the harness copies these
          # from harness/opt/tools/ into <subconscious>/tools/ on boot.
          "opt": ["tools/nudge", "tools/stash_messages"]}, indent=2) + "\n")
-    (S / "MEMORY.md").write_text("# Subconscious Memory\n\nNo findings yet.\n")
+    if not (S / "MEMORY.md").exists():
+        (S / "MEMORY.md").write_text("# Subconscious Memory\n\nNo findings yet.\n")
 
     # home traversable by the company group (mail drops), not listable;
     # agent dir group-readable (audits), configs owner-only, inbox group-writable
@@ -212,8 +222,10 @@ User={agent}
 Group={agent}
 UMask=0027
 WorkingDirectory={H}
+{('EnvironmentFile=' + company['llm_env_file']) if company.get('llm_env_file') else ''}
 ExecStart={ROOT}/venv/bin/python {ROOT}/harness/agent.py {A} {S}
 Restart=on-failure
+RestartPreventExitStatus=78
 RestartSec=5
 StandardOutput=journal
 StandardError=journal

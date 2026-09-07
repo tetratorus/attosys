@@ -54,7 +54,7 @@ ORG = company["org"]
 TOKEN = secrets.get("telegram_bot_token")
 if not TOKEN or TOKEN.startswith("1111111111:"):
     sys.exit("set telegram_bot_token in secrets.yaml")
-API = f"https://api.telegram.org/bot{TOKEN}"
+API = f"{company.get('telegram_api_base', 'https://api.telegram.org')}/bot{TOKEN}"
 
 
 def call(method, http="POST", **kw):

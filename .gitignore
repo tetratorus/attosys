@@ -8,3 +8,5 @@ proxy/
 mux/__pycache__/
 __pycache__/
 mux.py.bak
+.local-build-*/
+.discovery/

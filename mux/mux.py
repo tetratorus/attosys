@@ -43,7 +43,8 @@ UPSTREAM = "https://api.telegram.org"
 POLL_TIMEOUT = 25
 
 company = yaml.safe_load((ROOT / "company.yaml").read_text())
-secrets = yaml.safe_load((ROOT / "secrets.yaml").read_text())
+UPSTREAM = company.get("telegram_api_base", UPSTREAM)
+secrets = yaml.safe_load((pathlib.Path(os.environ.get("CREDENTIALS_DIRECTORY", ROOT)) / "secrets.yaml").read_text())
 TOKEN = secrets["telegram_bot_token"]
 ORG = company["org"]
 CHAT_ID = str(company["telegram_chat_id"])
@@ -230,6 +231,9 @@ async def handle_forward(request):
     method = request.match_info["method"]
     ctype = request.headers.get("Content-Type", "")
     body = await request.read()
+    if request.method == "GET" and request.query:
+        body = urlencode(list(request.query.items())).encode()
+        ctype = "application/x-www-form-urlencoded"
     body, ctype = tag_outbound(method, ctype, body, agent)
     session = request.app["session"]
     try:
@@ -253,7 +257,7 @@ async def handle_file(request):
     async with session.get(f"{UPSTREAM}/file/bot{TOKEN}/{file_path}",
                            timeout=aiohttp.ClientTimeout(total=60)) as r:
         data = await r.read()
-    return web.Response(body=data, content_type=r.content_type)
+    return web.Response(body=data, content_type=r.content_type, status=r.status)
 
 
 # We need `web` imported; aiohttp.web is the standard alias.

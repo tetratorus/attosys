@@ -24,6 +24,55 @@ does.
 | `labs` | Builder. Investigates tools and prototypes capabilities the company doesn't yet have. |
 | `trainer` | Coaches agents on company principles; audits, training cases. |
 
+## Local discovery with Apple container
+
+Keep `attosys`, `attobot`, `attotrain`, `attobrowser`, and `llmproxy`
+as sibling working checkouts. `attocode` remains a separate terminal interface;
+the company does not run another agent harness inside each employee. With Apple's `container` runtime running:
+
+```sh
+python3 local/up.py --name atto-discovery --duration 600
+```
+
+The launcher builds those working sources into an isolated Linux VM with actual
+systemd, employee Unix users, subconscious processes, Chromium, the mux, and a
+logging LLM proxy. A local Telegram-compatible chat service replaces only the
+external chat transport. It uses real model traffic, defaulting to `gpt-6-astra`
+through Responses. It mounts no host directories. Supply `ATTOBOT_API_KEY` via the
+environment or the hidden prompt; it is sent over stdin and retained in VM tmpfs,
+not the image. Infrastructure services run as dedicated non-root users.
+
+Chat and capture inspection are published on host loopback:
+
+```text
+http://127.0.0.1:8090
+http://127.0.0.1:8810
+```
+
+If the host resolver uses an unreachable loopback address, pass `--dns` with an
+explicit resolver permitted by your network. This changes only the container
+build/run DNS, not host or VPN configuration. `--build-only` builds without a key;
+`--no-build` reuses the existing image. Fixed published ports mean one local
+company can use this launch configuration at a time.
+
+```sh
+container exec atto-discovery systemctl list-units --all 'atto-*'
+container exec atto-discovery journalctl -u atto-sysadmin --no-pager -n 50
+container exec atto-discovery python3 /opt/attosys/local/bootstrap.py stop
+container stop atto-discovery
+```
+
+The deadline stops the initially provisioned employees, not the VM or retained
+artifacts. Infra/browser services remain available for inspection. Explicitly
+stop the VM when finished; new hires or separately started training services need
+their own deadline. Do not treat this discovery environment as a hardened
+multi-tenant production deployment.
+
+Training stays separate: export a captured decision with
+`/opt/attotrain/tools/extract_capture.py`, then follow attotrain's README. Preserve
+raw evidence and review real repeated trials before deploying a memory; a working
+company boot is not proof of self-improvement.
+
 ## Setup
 
 You need: an Ubuntu host (22.04+) with root, a Telegram account, and an LLM API
