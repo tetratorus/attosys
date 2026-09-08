@@ -70,6 +70,40 @@ http://127.0.0.1:8090
 http://127.0.0.1:8810
 ```
 
+### Telegram on Mac
+
+Prepare a Telegram supergroup with Topics enabled, add the company bot as an
+administrator with Manage Topics, and disable its privacy mode in BotFather.
+Then start with a hidden token prompt:
+
+```sh
+python3 local/up.py start --telegram
+```
+
+Alternatively supply `ATTOSYS_TELEGRAM_BOT_TOKEN` in the environment; for a new
+company this selects Telegram automatically. Tokens travel to the guest over
+stdin, are saved in root-only `secrets.yaml`, and are excluded from snapshots.
+
+The pre-start check validates the token, Topics, admin/topic permissions, and
+privacy mode. It also rejects an active webhook. A failed check exits with an
+error: it does not change Telegram settings, wait for setup, or start employees.
+For a new company the check runs before building or creating the container.
+
+Group discovery uses recent bot updates without acknowledging them. If there is
+no group event, send a message in the group and retry, or pass
+`--telegram-chat-id=-1001234567890`. If several groups are found, select one with
+that flag. The group owner becomes the CEO; `--telegram-user-id` overrides this.
+A bot cannot enumerate all its groups from its token alone. Use a dedicated bot
+with no other polling process.
+
+After validation, startup creates one topic per employee, saving each topic ID
+as it is created. Subsequent starts revalidate settings and reuse topics and
+employee state. A restored company requires its bot token again. The local
+chat UI is not started in Telegram mode; the model-request viewer stays local.
+`--idle` provisions Telegram and infrastructure while leaving employees stopped.
+Existing local-chat companies keep their transport; use a new `--name` to start
+a Telegram company. Existing images need a rebuild for Telegram launcher support.
+
 ### Matched OS and company-data snapshots
 
 `save` stops the company, boots its existing filesystem in maintenance mode for
@@ -123,7 +157,7 @@ This does not change host/VPN configuration. For Docker it configures the compan
 container, not the Docker build daemon's resolver.
 
 ```sh
-python3 -m unittest discover -s local -p 'test_[mrs]*.py' -v
+python3 -m unittest discover -s local -p 'test_*.py' -v
 python3 local/up.py start --build-only --runtime container
 ATTOSYS_CONTAINER_TESTS=1 python3 -m unittest discover -s local -p test_lifecycle.py -v
 ```

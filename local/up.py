@@ -15,11 +15,12 @@ import time
 import uuid
 
 import snapshot
+import telegram
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCES = {
     "attobot": ["agent.py", "SOUL.md", "opt", "requirements.txt", "lab-constraints.txt"],
-    "attosys": ["hire.py", "seed.py", "services.py", "mux", "templates", "local/chat.py", "local/bootstrap.py", "local/snapshot.py", "local/attosys-maintenance.target"],
+    "attosys": ["hire.py", "seed.py", "services.py", "mux", "templates", "local/chat.py", "local/bootstrap.py", "local/telegram.py", "local/snapshot.py", "local/attosys-maintenance.target"],
     "attotrain": ["*.py", "README.md", "steps", "tools", "tests"],
     "attobrowser": ["atto", "lib", "package.json", "package-lock.json"],
     "llmproxy": ["server.js", "stats-handler.js", "index.html", "package.json", "package-lock.json"],
@@ -89,6 +90,15 @@ class Runtime:
             raise RuntimeError('container returned an invalid file-presence response')
         return result.stdout.strip() == '1'
 
+    def chat_config(self, name):
+        result = self.run('exec', name, 'python3', '-c',
+                          "import json,pathlib,yaml; root=pathlib.Path('/opt/attosys'); path=root/'company.yaml'; "
+                          "c=yaml.safe_load(path.read_text()) if path.exists() else {}; "
+                          "print(json.dumps({'configured': bool(c), 'telegram': bool(c) and c.get('telegram_api_base', 'https://api.telegram.org') != 'http://127.0.0.1:8090', "
+                          "'telegram_chat_id': c.get('telegram_chat_id'), 'telegram_user_id': c.get('ceo', {}).get('telegram_user_id'), 'telegram_bot_id': c.get('telegram_bot_id'), "
+                          "'has_token': (root/'secrets.yaml').is_file()}))", capture_output=True, text=True, timeout=10)
+        return json.loads(result.stdout)
+
     def bootstrap(self, name, command, options=None):
         if options is None:
             return self.run('exec', name, 'python3', BOOTSTRAP, command, timeout=240)
@@ -124,9 +134,39 @@ def require_complete(runtime, name):
         raise ValueError('restore is incomplete; company left intact. Retry restore from the original snapshot with a new --name.')
 
 
+def telegram_options(args, saved):
+    token = os.environ.get('ATTOSYS_TELEGRAM_BOT_TOKEN') or ''
+    enabled = getattr(args, 'telegram', False) or saved['telegram'] or (token and not saved['configured'])
+    supplied = {field: getattr(args, field, None) for field in ('telegram_chat_id', 'telegram_user_id')}
+    if not enabled:
+        if any(value is not None for value in supplied.values()):
+            raise ValueError('use --telegram with Telegram group and user IDs')
+        return {}
+    if saved['configured'] and not saved['telegram']:
+        raise ValueError('this is a saved local-chat company; use a new --name for Telegram')
+    options = {'telegram': True}
+    for field, value in supplied.items():
+        if saved['configured']:
+            if value is not None and str(value) != str(saved[field]):
+                raise ValueError(f'{field} differs from the saved company; use a new --name')
+            value = saved[field]
+        options[field] = value
+    if not token and not saved['has_token']:
+        token = getpass.getpass('Telegram bot token (saved root-only in the company VM): ')
+        if not token:
+            raise ValueError('a Telegram bot token is required')
+    if token:
+        options.update(telegram.preflight(token, options['telegram_chat_id'], options['telegram_user_id'], saved.get('telegram_bot_id')))
+        options['telegram_bot_token'] = token
+        print(f"Telegram pre-start check passed: @{options['telegram_bot_username']}, group {options['telegram_chat_id']}.")
+    return options
+
+
 def start(runtime, args):
     info = runtime.info(args.name)
+    chat = None
     if info is None:
+        chat = telegram_options(args, {'configured': False, 'telegram': False, 'has_token': False})
         if not args.no_build:
             build(runtime, args)
         runtime.create(args, 'attosys-local')
@@ -141,6 +181,13 @@ def start(runtime, args):
         if runtime.present(args.name, '/run/attosys/ready'):
             print('Company already running; nothing changed.')
             return
+        if chat is None:
+            saved = runtime.chat_config(args.name)
+            if (getattr(args, 'telegram', False) or saved['telegram']) and not runtime.present(args.name, '/opt/attosys/local/telegram.py'):
+                raise ValueError('this image lacks Telegram launcher support; rebuild and start with a new --name')
+            chat = telegram_options(args, saved)
+        if chat.get('telegram') and not runtime.present(args.name, '/opt/attosys/local/telegram.py'):
+            raise ValueError('this image lacks Telegram launcher support; rebuild and start with a new --name')
         key = ''
         if not args.idle:
             key = os.environ.get('ATTOBOT_API_KEY') or ''
@@ -148,13 +195,16 @@ def start(runtime, args):
                 key = getpass.getpass('OpenAI API key (kept only in VM tmpfs): ')
                 if not key:
                     raise ValueError('an API key is required')
-        runtime.bootstrap(args.name, 'start', {'api_key': key, 'model': args.model, 'duration': args.duration, 'workers': not args.idle})
+        runtime.bootstrap(args.name, 'start', {'api_key': key, 'model': args.model, 'duration': args.duration, 'workers': not args.idle, **chat})
     except BaseException:
         runtime.run('stop', args.name)
         raise
     print(f'Container: {args.name}')
+    if chat.get('telegram'):
+        print(f"Chat: Telegram group {chat['telegram_chat_id']} (one topic per employee).")
     if info['configuration']['publishedPorts']:
-        print('Chat: http://127.0.0.1:8090')
+        if not chat.get('telegram'):
+            print('Chat: http://127.0.0.1:8090')
         print('Captured model requests: http://127.0.0.1:8810')
     else:
         print('No host ports published.')
@@ -281,6 +331,9 @@ def main():
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--no-build', action='store_true')
     parser.add_argument('--idle', action='store_true', help='start infrastructure without employees or an API key')
+    parser.add_argument('--telegram', action='store_true', help='connect to a preconfigured Telegram bot; token from environment or hidden prompt')
+    parser.add_argument('--telegram-chat-id', help='Telegram group ID; otherwise discovered from recent bot updates')
+    parser.add_argument('--telegram-user-id', type=int, help='CEO Telegram user ID; defaults to the group owner')
     parser.add_argument('--no-publish', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     if platform.system() not in ('Darwin', 'Linux'):
@@ -291,6 +344,8 @@ def main():
         parser.error('save and restore require an archive; start and stop do not take one')
     if args.build_only and args.command != 'start':
         parser.error('--build-only is only valid with start')
+    if (args.telegram or args.telegram_chat_id is not None or args.telegram_user_id is not None) and (args.command != 'start' or args.build_only):
+        parser.error('Telegram options are only valid when starting a company')
     lock_path = pathlib.Path(tempfile.gettempdir()) / f'attosys-{os.getuid()}-{args.name}.lock'
     try:
         with os.fdopen(os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600), 'w') as lock:

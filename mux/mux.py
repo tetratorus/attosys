@@ -168,7 +168,7 @@ async def poll_loop(session):
                 print(f"[mux:debug] poll got {len(ups)} updates, offset={offset}", flush=True)
                 persist_updates(ups)
         except Exception as e:
-            print(f"[mux] poll error: {e}", flush=True)
+            print(f"[mux] poll error: {type(e).__name__}", flush=True)
             await asyncio.sleep(5)
 
 
@@ -253,7 +253,7 @@ async def handle_forward(request):
             data = await r.json()
         return web.json_response(data, status=r.status)
     except Exception as e:
-        return web.json_response({"ok": False, "description": str(e)}, status=502)
+        return web.json_response({"ok": False, "description": f"upstream request failed ({type(e).__name__})"}, status=502)
 
 
 async def handle_file(request):
@@ -273,13 +273,23 @@ async def handle_file(request):
 from aiohttp import web
 
 
+@web.middleware
+async def upstream_errors(request, handler):
+    try:
+        return await handler(request)
+    except web.HTTPException:
+        raise
+    except Exception as error:
+        return web.json_response({'ok': False, 'description': f'upstream request failed ({type(error).__name__})'}, status=502)
+
+
 async def main():
     refresh_topics()
     if not THREAD_OF:
         print("[mux] no agents with topic_id in company.yaml yet — will pick them up as they're hired", flush=True)
     print(f"[mux] {len(THREAD_OF)} agents, chat {CHAT_ID}, listening on 127.0.0.1:{PORT}", flush=True)
 
-    app = web.Application(client_max_size=5*1024*1024)  # 5MB
+    app = web.Application(client_max_size=5*1024*1024, middlewares=[upstream_errors])  # 5MB
     app["session"] = aiohttp.ClientSession()
 
     # Routes. The agent segment carries the routing key; method is the Bot API

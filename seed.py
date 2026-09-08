@@ -59,9 +59,12 @@ API = f"{company.get('telegram_api_base', 'https://api.telegram.org')}/bot{TOKEN
 
 def call(method, http="POST", **kw):
     fn = requests.post if http == "POST" else requests.get
-    data = fn(f"{API}/{method}", timeout=40, **kw).json()
+    try:
+        data = fn(f"{API}/{method}", timeout=40, **kw).json()
+    except requests.RequestException:
+        raise requests.RequestException(f'Telegram {method} request failed; check network access and the bot token.') from None
     if not data.get("ok"):
-        err = RuntimeError(f"{method} failed: {data}")
+        err = RuntimeError(f"{method} failed: {str(data).replace(TOKEN, '[redacted]')}")
         err.response = data  # attach the raw Telegram response for callers
         raise err
     return data["result"]

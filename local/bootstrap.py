@@ -11,6 +11,7 @@ import time
 import urllib.request
 
 import yaml
+import telegram
 from snapshot import MAINTENANCE_TARGET, RESTORE_PENDING
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -196,27 +197,30 @@ def bootstrap(options):
         except KeyError:
             run("useradd", "--system", "--no-create-home", user)
     company_path = ROOT / "company.yaml"
-    if not company_path.exists():
+    existing = company_path.exists()
+    if existing:
+        company = yaml.safe_load(company_path.read_text())
+    else:
         company = {"org": "atto", "name": "Local Attosys", "ceo": {"name": "CEO", "telegram_user_id": 1},
-                   "telegram_chat_id": "-1001", "telegram_api_base": "http://127.0.0.1:8090", "mux_url": "http://127.0.0.1:8811",
+                   "mux_url": "http://127.0.0.1:8811",
                    "provider": "openai", "model": options.get("model", "gpt-6-astra"), "proxy_url": "http://127.0.0.1:8810",
                    "llm_env_file": str(ENV_FILE), "agent_config": {"provider": "openai_responses", "max_tokens": 4096, "multimodal_support": True},
                    "agents": {role: {"sudo": role == "hr", "description": description} for role, description in {
                        "hr": "Head of HR and Chief of Staff", "sysadmin": "Owns company infrastructure", "labs": "Builds capabilities", "trainer": "Investigates and improves employee behavior"}.items()}}
-        write(company_path, yaml.safe_dump(company, sort_keys=False))
-    company = yaml.safe_load(company_path.read_text())
+    telegram.configure(ROOT, company, options, write, existing=existing)
     names = roster(company)
     prepare()
-    if not (ROOT / "secrets.yaml").exists():
-        write(ROOT / "secrets.yaml", yaml.safe_dump({"telegram_bot_token": secrets.token_hex(24), "api_key": ""}), 0o600)
-    unit("atto-chat", f"/usr/bin/python3 {ROOT}/local/chat.py", "_atto_chat",
-         f"StateDirectory=atto-chat\nLoadCredential=secrets.yaml:{ROOT}/secrets.yaml")
-    wait("http://127.0.0.1:8090/")
-    if any(spec.get('topic_id') is None for spec in company['agents'].values()):
-        run("/usr/bin/python3", str(ROOT / "seed.py"))
+    if company['telegram_api_base'] == telegram.LOCAL_API:
+        unit("atto-chat", f"/usr/bin/python3 {ROOT}/local/chat.py", "_atto_chat",
+             f"StateDirectory=atto-chat\nLoadCredential=secrets.yaml:{ROOT}/secrets.yaml")
+        wait("http://127.0.0.1:8090/")
+        if any(spec.get('topic_id') is None for spec in company['agents'].values()):
+            run("/usr/bin/python3", str(ROOT / "seed.py"))
     unit("atto-proxy", "/usr/local/bin/node /opt/llmproxy/server.js", "_atto_proxy",
          "StateDirectory=atto-proxy\nEnvironment=PORT=8810\nEnvironment=LLMPROXY_DB=/var/lib/atto-proxy/requests.db\nWorkingDirectory=/opt/llmproxy")
     wait("http://127.0.0.1:8810/health")
+    if options.get('telegram_bot_token'):
+        halt(['atto-mux.service'])
     unit("atto-mux", f"{ROOT}/venv/bin/python {ROOT}/mux/mux.py", "_atto_mux",
          f"StateDirectory=atto-mux\nEnvironment=MUX_DB=/var/lib/atto-mux/updates.db\nLoadCredential=secrets.yaml:{ROOT}/secrets.yaml")
     wait(f"http://127.0.0.1:8811/bot{next(iter(names.values()))}/getMe")

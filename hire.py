@@ -81,9 +81,12 @@ def render_soul(template, agent):
 
 
 def assert_bot_settings(token):
-    data = requests.get(f"{company.get('telegram_api_base', 'https://api.telegram.org')}/bot{token}/getMe", timeout=10).json()
+    try:
+        data = requests.get(f"{company.get('telegram_api_base', 'https://api.telegram.org')}/bot{token}/getMe", timeout=10).json()
+    except requests.RequestException:
+        sys.exit('Telegram getMe request failed; check network access and the bot token.')
     if not data.get("ok"):
-        sys.exit(f"getMe failed: {data}")
+        sys.exit('Telegram getMe failed; check the bot token.')
     bot = data["result"]
     issues = []
     if not bot.get("can_join_groups"):
