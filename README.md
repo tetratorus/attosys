@@ -83,11 +83,13 @@ private directory containing:
 | `manifest.json` | Format version, CPU architecture, and checksums binding the two snapshots together. |
 
 Both snapshots are required and restored together. Transfer the entire directory.
-On the receiving machine, use this launcher's `local/up.py` and `local/snapshot.py`
-(or an attosys checkout) to run `restore`, then `start`. The other sibling source
-checkouts are not needed: the OS snapshot contains the actual saved applications.
+On the receiving machine, use this launcher's `local/up.py`, `local/snapshot.py`,
+and `local/attosys-maintenance.target` (or an attosys checkout) to run `restore`, then
+`start`. The other sibling source checkouts are not needed: the OS snapshot contains the actual saved applications.
 Restore builds a local image from the saved OS files, restores the data, verifies
 it in maintenance mode, and leaves the company stopped until explicitly started.
+Data import uses the current launcher's helper in tmpfs, without replacing saved
+application code, so importer fixes also apply to older snapshot pairs.
 Existing containers and snapshot destinations are never overwritten. An interrupted
 restore remains marked incomplete and cannot be started or saved. Keep the original
 snapshot and retry `restore` with a new `--name`; the failed container is retained
@@ -121,19 +123,27 @@ This does not change host/VPN configuration. For Docker it configures the compan
 container, not the Docker build daemon's resolver.
 
 ```sh
-python3 -m unittest discover -s local -p 'test_[rs]*.py' -v
+python3 -m unittest discover -s local -p 'test_[mrs]*.py' -v
 python3 local/up.py start --build-only --runtime container
 ATTOSYS_CONTAINER_TESTS=1 python3 -m unittest discover -s local -p test_lifecycle.py -v
 ```
 
 The lifecycle test rejects stale images by checking packaged source hashes against
 the current sibling checkouts. It uses real isolated containers, installs a native
-tool, exercises stop/restart, interrupted restore, and paired restore, and leaves
-test containers stopped. It performs a bounded live-model continuation check only
-when `ATTOBOT_API_KEY` is supplied.
+tool, and exercises stop/restart, interrupted restore, and paired restore. It also
+checks numeric-only ownership and isolation from custom timers, sockets, paths,
+and writers. Its own test containers are deleted afterward; set
+`ATTOSYS_KEEP_TEST_CONTAINERS=1` to retain them stopped for debugging. It performs
+a bounded live-model continuation check only when `ATTOBOT_API_KEY` is supplied.
 The lifecycle test also runs the mux HTTP regression inside the image, exercising
 its actual aiohttp version. Running `local/test_persistence.py` separately needs
 `aiohttp`, `requests`, and PyYAML.
+
+Maintenance boots use a dedicated target rather than `basic.target`, so normal
+timer, socket and path activation targets do not start. Full pause isolates back
+to that target before database checkpoints. Older containers with `basic.target`
+startup are refused; existing paired snapshots can be restored under a new name
+with the current launcher.
 
 OS export reads the quiescent guest filesystem rather than relying on Apple
 container's native filesystem exporter. Transfers use process streams because

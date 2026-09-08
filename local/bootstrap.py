@@ -11,7 +11,7 @@ import time
 import urllib.request
 
 import yaml
-from snapshot import RESTORE_PENDING
+from snapshot import MAINTENANCE_TARGET, RESTORE_PENDING
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from services import employee_service
@@ -138,6 +138,7 @@ def stop(full=False):
         halt(browsers)
         halt(set(names) & {"atto-mux.service"})
         halt(set(names) & {"atto-chat.service", "atto-proxy.service"})
+        run('systemctl', 'isolate', MAINTENANCE_TARGET)
         check_databases(checkpoint=True)
         run("sync")
 

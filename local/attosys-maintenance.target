@@ -1,0 +1,6 @@
+[Unit]
+Description=Attosys isolated snapshot maintenance
+DefaultDependencies=no
+Requires=systemd-tmpfiles-setup.service
+After=systemd-tmpfiles-setup.service
+AllowIsolate=yes

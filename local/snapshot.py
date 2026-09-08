@@ -6,16 +6,18 @@ import pathlib
 import re
 import tarfile
 
-ENTRYPOINT = ["/lib/systemd/systemd", "--system", "--log-target=console", "--unit=basic.target"]
+MAINTENANCE_TARGET = 'attosys-maintenance.target'
+ENTRYPOINT = ["/lib/systemd/systemd", "--system", "--log-target=console", "--unit=" + MAINTENANCE_TARGET]
 RESTORE_PENDING = '/var/lib/attosys-restore-pending'
 CONTAINERFILE = '''FROM scratch
 ADD os.tar /
+COPY attosys-maintenance.target /etc/systemd/system/attosys-maintenance.target
 RUN mkdir -p /run /tmp /proc /sys /dev /var/lib && chmod 1777 /tmp && touch /var/lib/attosys-restore-pending
 ENV container=oci DEBIAN_FRONTEND=noninteractive PYTHONDONTWRITEBYTECODE=1
 ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 LABEL io.attosys.local.version="1"
 STOPSIGNAL SIGRTMIN+3
-ENTRYPOINT ["/lib/systemd/systemd", "--system", "--log-target=console", "--unit=basic.target"]
+ENTRYPOINT ["/lib/systemd/systemd", "--system", "--log-target=console", "--unit=attosys-maintenance.target"]
 '''
 MANIFEST = 'attosys-manifest.json'
 COMPANY_FILES = ('opt/attosys/company.yaml', 'opt/attosys/handbook.md', 'opt/attosys/local-state.json', 'opt/attosys/shared')
@@ -101,6 +103,8 @@ def inspect_archive(path):
                 continue
             if not permitted(name, allowed) or not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
                 raise ValueError(f'unsupported archive entry: {name}')
+            if not all(0 <= identity < 2**32 - 1 for identity in (member.uid, member.gid)):
+                raise ValueError(f'invalid archive ownership: {name}')
             for parent in pathlib.PurePosixPath(name).parents:
                 ancestor = indexed.get(str(parent))
                 if ancestor and not ancestor.isdir():
@@ -115,6 +119,20 @@ def inspect_archive(path):
             if required not in indexed or not indexed[required].isfile():
                 raise ValueError(f'missing company state: {required}')
         return manifest
+
+
+def ownership(member):
+    import grp
+    import pwd
+    try:
+        uid = pwd.getpwnam(member.uname).pw_uid
+    except KeyError:
+        uid = member.uid
+    try:
+        gid = grp.getgrnam(member.gname).gr_gid
+    except KeyError:
+        gid = member.gid
+    return uid, gid
 
 
 def unpack(source, root=pathlib.Path('/')):
@@ -139,7 +157,7 @@ def unpack(source, root=pathlib.Path('/')):
         for name in manifest['employees']:
             subprocess.run(['usermod', '-aG', company['org'], name], check=True)
         members = [member for member in archive if member.name != MANIFEST]
-        identities = {member.name: (pwd.getpwnam(member.uname).pw_uid, grp.getgrnam(member.gname).gr_gid) for member in members}
+        identities = {member.name: ownership(member) for member in members}
         for member in members:
             destination = root / member.name
             for parent in destination.parents:

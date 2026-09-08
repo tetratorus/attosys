@@ -19,7 +19,7 @@ import snapshot
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCES = {
     "attobot": ["agent.py", "SOUL.md", "opt", "requirements.txt", "lab-constraints.txt"],
-    "attosys": ["hire.py", "seed.py", "services.py", "mux", "templates", "local/chat.py", "local/bootstrap.py", "local/snapshot.py"],
+    "attosys": ["hire.py", "seed.py", "services.py", "mux", "templates", "local/chat.py", "local/bootstrap.py", "local/snapshot.py", "local/attosys-maintenance.target"],
     "attotrain": ["*.py", "README.md", "steps", "tools", "tests"],
     "attobrowser": ["atto", "lib", "package.json", "package-lock.json"],
     "llmproxy": ["server.js", "stats-handler.js", "index.html", "package.json", "package-lock.json"],
@@ -57,8 +57,8 @@ class Runtime:
     def supported(self, info):
         cfg = info['configuration']
         process = cfg['initProcess']
-        if process['executable'] != snapshot.ENTRYPOINT[0] or '--unit=basic.target' not in process['arguments']:
-            raise ValueError('This container predates restart support and was left untouched. Use a new --name for the new launcher.')
+        if process['executable'] != snapshot.ENTRYPOINT[0] or '--unit=' + snapshot.MAINTENANCE_TARGET not in process['arguments']:
+            raise ValueError('This container predates isolated maintenance startup and was left untouched. Use a new --name for the new launcher.')
         for mount in cfg['mounts']:
             temporary = 'tmpfs' in mount['type'] and mount['destination'] in ('/run', '/tmp')
             cgroup = self.kind == 'docker' and mount['destination'] == '/sys/fs/cgroup' and mount.get('source') == '/sys/fs/cgroup'
@@ -74,8 +74,8 @@ class Runtime:
 
     def wait(self, name):
         for _ in range(60):
-            result = subprocess.run([self.binary, 'exec', name, 'systemctl', 'is-system-running'], capture_output=True, text=True, timeout=5)
-            if result.stdout.strip() in ('running', 'degraded'):
+            result = subprocess.run([self.binary, 'exec', name, 'systemctl', 'is-active', snapshot.MAINTENANCE_TARGET], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0 and result.stdout.strip() == 'active':
                 return
             time.sleep(1)
         raise RuntimeError('systemd did not become ready')
@@ -240,20 +240,23 @@ def restore(runtime, args):
         context = pathlib.Path(temporary)
         shutil.copyfile(directory / 'os.tar', context / 'os.tar')
         (context / 'Containerfile').write_text(snapshot.CONTAINERFILE)
+        shutil.copyfile(ROOT / 'local' / snapshot.MAINTENANCE_TARGET, context / snapshot.MAINTENANCE_TARGET)
         runtime.run('build', '--file', 'Containerfile', '--tag', reference, '--progress', 'plain', '.', cwd=context)
     if not args.dns and manifest.get('dns'):
         args.dns = manifest['dns'][0]
     runtime.create(args, reference)
     runtime.supported(runtime.info(args.name))
     remote = '/var/lib/.attosys-transfer-' + uuid.uuid4().hex + '.tar'
+    helper = '/run/attosys-restore-' + uuid.uuid4().hex + '.py'
     try:
         runtime.run('start', args.name)
         runtime.wait(args.name)
-        with (directory / 'data.tar').open('rb') as data:
-            runtime.run('exec', '--interactive', args.name, 'python3', '-c',
-                        "import os,shutil,sys; os.umask(0o077); shutil.copyfileobj(sys.stdin.buffer, open(sys.argv[1], 'xb'))", remote, stdin=data)
-        runtime.run('exec', args.name, 'python3', '/opt/attosys/local/snapshot.py', 'unpack', remote)
-        runtime.run('exec', args.name, 'python3', '-c', 'import pathlib,sys; pathlib.Path(sys.argv[1]).unlink()', remote)
+        for source, target in ((pathlib.Path(snapshot.__file__), helper), (directory / 'data.tar', remote)):
+            with source.open('rb') as data:
+                runtime.run('exec', '--interactive', args.name, 'python3', '-c',
+                            "import os,shutil,sys; os.umask(0o077); shutil.copyfileobj(sys.stdin.buffer, open(sys.argv[1], 'xb'))", target, stdin=data)
+        runtime.run('exec', args.name, 'python3', helper, 'unpack', remote)
+        runtime.run('exec', args.name, 'python3', '-c', 'import pathlib,sys; [pathlib.Path(path).unlink() for path in sys.argv[1:]]', remote, helper)
         runtime.bootstrap(args.name, 'prepare')
         runtime.run('exec', args.name, 'python3', '-c',
                     'import os,pathlib,sys; os.sync(); pathlib.Path(sys.argv[1]).unlink(); os.sync()', snapshot.RESTORE_PENDING)

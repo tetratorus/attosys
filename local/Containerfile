@@ -8,8 +8,9 @@ RUN python3 -m venv --system-site-packages /opt/attosys/venv \
     && /opt/attosys/venv/bin/pip install -r /opt/attobot/requirements.txt -c /opt/attobot/lab-constraints.txt \
     && npm ci --prefix /opt/llmproxy && npm ci --prefix /opt/attobrowser \
     && ln -s /opt/attobot /opt/attosys/harness \
-    && ln -s /opt/attobrowser/atto /usr/local/bin/atto
+    && ln -s /opt/attobrowser/atto /usr/local/bin/atto \
+    && install -m 644 /opt/attosys/local/attosys-maintenance.target /etc/systemd/system/attosys-maintenance.target
 ENV PYTHONDONTWRITEBYTECODE=1
 STOPSIGNAL SIGRTMIN+3
 LABEL io.attosys.local.version="1"
-ENTRYPOINT ["/lib/systemd/systemd", "--system", "--log-target=console", "--unit=basic.target"]
+ENTRYPOINT ["/lib/systemd/systemd", "--system", "--log-target=console", "--unit=attosys-maintenance.target"]

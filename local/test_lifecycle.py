@@ -41,6 +41,34 @@ def fixture(action):
         service.write_text('[Unit]\nDescription=Snapshot service fixture\n[Service]\nExecStart=/bin/sleep infinity\n[Install]\nWantedBy=multi-user.target\n')
         subprocess.run(['systemctl', 'enable', 'custom-snapshot-test.service'], check=True)
         paths = {str(service): fingerprint(service)}
+        importer = ROOT / 'local/snapshot.py'
+        importer.write_text(importer.read_text().replace('        unpack(filename)\n', "        raise RuntimeError('old importer lacks numeric-owner support')\n"))
+        paths[str(importer)] = fingerprint(importer)
+        numeric = ROOT / 'shared/numeric-owner'
+        numeric.write_text('preserve numeric ownership')
+        os.chown(numeric, 123456789, 123456789)
+        paths[str(numeric)] = fingerprint(numeric)
+        units = {
+            'review-writer.service': f'[Unit]\nDescription=Snapshot writer fixture\n[Service]\nType=oneshot\nExecStart=/usr/bin/python3 {ROOT}/local/test_lifecycle.py --fixture write-probe\n',
+            'review-writer.timer': '[Timer]\nOnBootSec=100ms\nOnUnitInactiveSec=100ms\nAccuracySec=1ms\n[Install]\nWantedBy=timers.target\n',
+            'review-socket.service': '[Service]\nExecStart=/bin/sleep infinity\n',
+            'review-writer.socket': '[Socket]\nListenStream=/run/review-snapshot.sock\nService=review-socket.service\n[Install]\nWantedBy=sockets.target\n',
+            'review-writer.path': '[Path]\nPathExists=/run/review-snapshot-trigger\n[Install]\nWantedBy=paths.target\n',
+        }
+        for name, content in units.items():
+            pathlib.Path('/etc/systemd/system', name).write_text(content)
+        subprocess.run(['systemctl', 'daemon-reload'], check=True)
+        activated = subprocess.run(['systemctl', 'enable', '--now', 'review-writer.timer', 'review-writer.socket', 'review-writer.path'])
+        if activated.returncode:
+            subprocess.run(['systemctl', 'status', '--no-pager', 'review-writer.timer', 'review-writer.socket', 'review-writer.path', 'review-writer.service'])
+            subprocess.run(['journalctl', '--no-pager', '-n', '40', '-u', 'review-writer.timer', '-u', 'review-writer.socket', '-u', 'review-writer.path', '-u', 'review-writer.service'])
+            activated.check_returncode()
+        for _ in range(100):
+            if pathlib.Path('/var/lib/attosys-maintenance-probe').exists():
+                break
+            time.sleep(.05)
+        else:
+            raise AssertionError('custom timer did not activate its writer')
         codeword = 'cedar-' + uuid.uuid4().hex
         for user in ('atto-hr', 'atto-apprentice'):
             home = pathlib.Path('/home') / user
@@ -107,6 +135,18 @@ def fixture(action):
         result = subprocess.check_output(['runuser', '-u', 'atto-apprentice', '--', '/home/atto-apprentice/.venv/bin/jq', '-n', '6*7'], text=True)
         assert result.strip() == '42'
         print('Saved files, ownership, roster, installed native tool and all three databases verified.')
+    elif action == 'write-probe':
+        with pathlib.Path('/var/lib/attosys-maintenance-probe').open('a') as file:
+            file.write(str(time.time_ns()) + '\n')
+    elif action == 'quiescent':
+        for name in ('review-writer.timer', 'review-writer.socket', 'review-writer.path', 'review-writer.service', 'review-socket.service',
+                     'timers.target', 'sockets.target', 'paths.target'):
+            assert subprocess.run(['systemctl', 'is-active', '--quiet', name]).returncode != 0, f'active during maintenance: {name}'
+        probe = pathlib.Path('/var/lib/attosys-maintenance-probe')
+        before = probe.read_bytes()
+        time.sleep(.5)
+        assert probe.read_bytes() == before, 'custom writer changed files during maintenance'
+        print('Custom timers, sockets, paths and writers remain stopped in maintenance.')
     elif action == 'live':
         company = yaml.safe_load((ROOT / 'company.yaml').read_text())
         subprocess.run(['systemctl', 'disable', *[f'atto-{role}.service' for role in company['agents'] if role != 'apprentice']], check=True)
@@ -135,6 +175,7 @@ class LifecycleTests(unittest.TestCase):
         def inside(name, action):
             runtime.run('exec', name, 'python3', '/opt/attosys/local/test_lifecycle.py', '--fixture', action)
         try:
+            self.assertIsNone(runtime.info(source))
             names.append(source)
             cli('start', source, '--idle', '--no-build')
             expected = {}
@@ -152,6 +193,8 @@ class LifecycleTests(unittest.TestCase):
             runtime.run('cp', ROOT / 'local/test_persistence.py', source + ':/opt/attosys/local/test_persistence.py')
             runtime.run('exec', source, 'python3', '-m', 'unittest', 'discover', '-s', '/opt/attosys/local', '-p', 'test_persistence.py', '-v')
             inside(source, 'prepare')
+            runtime.bootstrap(source, 'pause')
+            inside(source, 'quiescent')
             cli('start', source, '--idle')
             cli('stop', source)
             cli('start', source, '--idle', '--source-root', '/nonexistent/sibling-checkouts')
@@ -162,7 +205,12 @@ class LifecycleTests(unittest.TestCase):
                 self.assertEqual(stat.S_IMODE(archive.stat().st_mode), 0o700)
                 self.assertEqual({path.name for path in archive.iterdir()}, {'os.tar', 'data.tar', 'manifest.json'})
                 self.assertTrue(all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in archive.iterdir()))
+                runtime.run('start', source)
+                runtime.wait(source)
+                inside(source, 'quiescent')
+                runtime.run('stop', source)
                 failed = 'atto-incomplete-' + suffix
+                self.assertIsNone(runtime.info(failed))
                 names.append(failed)
                 args = SimpleNamespace(name=failed, archive=archive, dns='1.1.1.1', no_publish=True)
                 with mock.patch.object(runtime, 'bootstrap', side_effect=RuntimeError('injected validation failure')):
@@ -175,11 +223,13 @@ class LifecycleTests(unittest.TestCase):
                     self.assertIn('restore is incomplete', rejected.stderr)
                     self.assertEqual(runtime.info(failed)['status']['state'], 'stopped')
                 self.assertFalse((pathlib.Path(directory) / 'incomplete-snapshot').exists())
+                self.assertIsNone(runtime.info(restored))
                 names.append(restored)
                 cli('restore', restored, archive, '--source-root', '/nonexistent/sibling-checkouts')
                 self.assertEqual(runtime.info(restored)['status']['state'], 'stopped')
                 runtime.run('start', restored)
                 runtime.wait(restored)
+                inside(restored, 'quiescent')
                 inside(restored, 'offline')
                 cli('start', restored, '--idle', '--source-root', '/nonexistent/sibling-checkouts')
                 inside(restored, 'restored')
@@ -204,8 +254,12 @@ class LifecycleTests(unittest.TestCase):
                     print('Live continuation not run: supply ATTOBOT_API_KEY to include paid model verification.', flush=True)
         finally:
             for name in names:
-                if runtime.info(name) and runtime.info(name)['status']['state'] == 'running':
-                    cli('stop', name)
+                info = runtime.info(name)
+                if info:
+                    if info['status']['state'] == 'running':
+                        runtime.run('stop', name)
+                    if os.environ.get('ATTOSYS_KEEP_TEST_CONTAINERS') != '1':
+                        runtime.run('delete' if runtime.kind == 'container' else 'rm', name)
 
 
 if __name__ == '__main__':

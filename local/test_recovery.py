@@ -64,6 +64,20 @@ class RestoreRecoveryTests(unittest.TestCase):
         self.assertFalse(any('/var/lib/attosys-restore-pending' in call.args for call in self.runtime.run.call_args_list))
         self.runtime.run.assert_called_with('stop', self.args.name)
 
+    def test_restore_uses_current_importer_without_overwriting_saved_application(self):
+        self.args.archive.mkdir()
+        for name in ('os.tar', 'data.tar'):
+            (self.args.archive / name).write_bytes(b'test fixture')
+        self.runtime.info.side_effect = [None, {'status': {'state': 'stopped'}}]
+        self.runtime.architecture.return_value = 'arm64'
+        with mock.patch.object(snapshot, 'inspect_pair', return_value={'architecture': 'arm64'}):
+            up.restore(self.runtime, self.args)
+        calls = self.runtime.run.call_args_list
+        importer = next(call.args[3] for call in calls if 'unpack' in call.args)
+        self.assertTrue(importer.startswith('/run/'))
+        self.assertTrue(any(getattr(call.kwargs.get('stdin'), 'name', None) == snapshot.__file__ for call in calls))
+        self.assertFalse(any('/opt/attosys/local/snapshot.py' in call.args for call in calls))
+
     def test_presence_probe_fails_closed_on_runtime_errors(self):
         runtime = object.__new__(up.Runtime)
         runtime.binary = 'container'
