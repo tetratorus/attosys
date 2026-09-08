@@ -10,3 +10,4 @@ __pycache__/
 mux.py.bak
 .local-build-*/
 .discovery/
+/mux.sqlite3*

@@ -14,12 +14,15 @@ import grp, json, os, pathlib, pwd, shutil, subprocess, sys
 
 import requests
 import yaml
+from services import employee_service
 
 ROOT = pathlib.Path(__file__).resolve().parent
 
 if os.geteuid() != 0:
     sys.exit("run as root (sudo)")
-if len(sys.argv) < 2:
+start = "--no-start" not in sys.argv[1:]
+roles = [arg for arg in sys.argv[1:] if arg != "--no-start"]
+if not roles:
     sys.exit(__doc__.strip())
 for f in ("company.yaml", "secrets.yaml", "harness/agent.py", "venv/bin/python"):
     if not (ROOT / f).exists():
@@ -115,7 +118,7 @@ if not handbook.exists():
 if TG_TOKEN:
     assert_bot_settings(TG_TOKEN)  # privacy must be off so the one bot reads every topic
 
-for role in sys.argv[1:]:
+for role in roles:
     spec = company["agents"].get(role)
     if spec is None:
         sys.exit(f"{role}: not in company.yaml agents")
@@ -212,29 +215,9 @@ for role in sys.argv[1:]:
         s.write_text(f"{agent} ALL=(ALL) NOPASSWD:ALL\n")
         os.chmod(s, 0o440)
 
-    pathlib.Path(f"/etc/systemd/system/{agent}.service").write_text(f"""[Unit]
-Description={NAME} agent: {agent}
-After=network.target
-
-[Service]
-Type=simple
-User={agent}
-Group={agent}
-UMask=0027
-WorkingDirectory={H}
-{('EnvironmentFile=' + company['llm_env_file']) if company.get('llm_env_file') else ''}
-ExecStart={ROOT}/venv/bin/python {ROOT}/harness/agent.py {A} {S}
-Restart=on-failure
-RestartPreventExitStatus=78
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-""")
+    pathlib.Path(f"/etc/systemd/system/{agent}.service").write_text(employee_service(ROOT, company, agent))
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "enable", "--now", f"{agent}.service"], check=True)
+    subprocess.run(["systemctl", "enable", *(["--now"] if start else []), f"{agent}.service"], check=True)
     print(f"{agent}: hired (telegram={'via mux' if chatful else 'none — chat-less'} topic={spec.get('topic_id', '-')})")
 
 print("done — agents check in via their Telegram topics; journalctl -u <agent> for logs")

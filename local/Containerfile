@@ -11,4 +11,5 @@ RUN python3 -m venv --system-site-packages /opt/attosys/venv \
     && ln -s /opt/attobrowser/atto /usr/local/bin/atto
 ENV PYTHONDONTWRITEBYTECODE=1
 STOPSIGNAL SIGRTMIN+3
-ENTRYPOINT ["/lib/systemd/systemd", "--system", "--log-target=console"]
+LABEL io.attosys.local.version="1"
+ENTRYPOINT ["/lib/systemd/systemd", "--system", "--log-target=console", "--unit=basic.target"]

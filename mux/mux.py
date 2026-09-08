@@ -31,6 +31,7 @@ import asyncio
 import json
 import os
 import pathlib
+import sqlite3
 import time
 from urllib.parse import urlparse, parse_qsl, urlencode
 
@@ -54,6 +55,17 @@ THREAD_OF = {}                 # agent name -> thread id (reloaded when company.
 BUFFERS = {}                   # thread id -> list of update dicts
 EVENTS = {}                    # thread id -> asyncio.Event (set when new updates arrive)
 _mtime = 0
+DB_PATH = pathlib.Path(os.environ.get("MUX_DB", ROOT / "mux.sqlite3"))
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+DB_PATH.touch(mode=0o600, exist_ok=True)
+db = sqlite3.connect(DB_PATH)
+db.executescript("""
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS updates(id INTEGER PRIMARY KEY, topic INTEGER, body TEXT);
+CREATE INDEX IF NOT EXISTS updates_topic ON updates(topic, id);
+CREATE TABLE IF NOT EXISTS cursor(offset INTEGER);
+INSERT INTO cursor SELECT 0 WHERE NOT EXISTS(SELECT 1 FROM cursor);
+""")
 
 
 def refresh_topics():
@@ -116,48 +128,45 @@ def updates_for(thread_id, offset):
     """Return updates for *thread_id* with update_id >= *offset*, and prune
     consumed entries (update_id < offset) from the buffer. Single-threaded
     event loop — no lock needed."""
-    buf = BUFFERS.get(thread_id)
-    if not buf:
-        return []
-    kept = [u for u in buf if u["update_id"] >= offset]
+    with db:
+        db.execute("DELETE FROM updates WHERE topic=? AND id<?", (thread_id, offset))
+    kept = [json.loads(row[0]) for row in db.execute("SELECT body FROM updates WHERE topic=? ORDER BY id LIMIT 100", (thread_id,))]
     BUFFERS[thread_id] = kept
     return kept
+
+
+def persist_updates(updates):
+    refresh_topics()
+    topics = set()
+    with db:
+        for update in updates:
+            message = update.get("message") or {}
+            topic = message.get("message_thread_id")
+            if str((message.get("chat") or {}).get("id")) == CHAT_ID and topic in BUFFERS:
+                db.execute("INSERT OR IGNORE INTO updates VALUES(?,?,?)", (update["update_id"], topic, json.dumps(update)))
+                topics.add(topic)
+            db.execute("UPDATE cursor SET offset=MAX(offset, ?)", (update["update_id"] + 1,))
+    for topic in topics:
+        EVENTS[topic].set()
 
 
 async def poll_loop(session):
     """Single getUpdates task. Fans each update into its topic's buffer and
     signals the per-topic Event so any waiting getUpdates handler wakes up."""
-    offset = 0
     while True:
         try:
+            offset = db.execute("SELECT offset FROM cursor").fetchone()[0]
             async with session.post(
                     f"{UPSTREAM}/bot{TOKEN}/getUpdates",
                     data={"offset": offset, "timeout": POLL_TIMEOUT},
                     timeout=aiohttp.ClientTimeout(total=POLL_TIMEOUT + 20)) as r:
                 data = await r.json()
+            if not data.get("ok"):
+                raise RuntimeError("upstream getUpdates failed")
             ups = data.get("result", [])
             if ups:
                 print(f"[mux:debug] poll got {len(ups)} updates, offset={offset}", flush=True)
-            for u in ups:
-                offset = u["update_id"] + 1
-                msg = u.get("message") or {}
-                msg_cid = str((msg.get("chat") or {}).get("id") or "")
-                if msg_cid != CHAT_ID:
-                    print(f"[mux:debug] drop: chat {msg_cid} != {CHAT_ID}", flush=True)
-                    continue
-                tid = msg.get("message_thread_id")
-                if tid is None:
-                    print(f"[mux:debug] drop: no topic", flush=True)
-                    continue
-                tid = int(tid)
-                if tid not in BUFFERS:
-                    print(f"[mux:debug] drop: topic {tid} not in BUFFERS (have {list(BUFFERS.keys())})", flush=True)
-                    continue
-                BUFFERS[tid].append(u)
-                print(f"[mux:debug] buffered update {u['update_id']} for topic {tid}, buf len={len(BUFFERS[tid])}", flush=True)
-                ev = EVENTS.get(tid)
-                if ev is not None:
-                    ev.set()
+                persist_updates(ups)
         except Exception as e:
             print(f"[mux] poll error: {e}", flush=True)
             await asyncio.sleep(5)
@@ -282,7 +291,7 @@ async def main():
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", PORT)
+    site = web.TCPSite(runner, "127.0.0.1", PORT, shutdown_timeout=5)
     await site.start()
 
     # Background tasks — set BEFORE site.start() to avoid aiohttp 3.14 deprecation
@@ -294,22 +303,25 @@ async def main():
 
     # Signal handlers for crash diagnostics
     import signal
+    stopped = asyncio.Event()
     def _log_signal(signum, frame):
         import os, traceback
         print(f"[mux] received signal {signum} ({signal.Signals(signum).name})", flush=True)
         traceback.print_stack(frame)
-    signal.signal(signal.SIGTERM, _log_signal)
-    signal.signal(signal.SIGINT, _log_signal)
+        stopped.set()
+    asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, _log_signal, signal.SIGTERM, None)
+    asyncio.get_running_loop().add_signal_handler(signal.SIGINT, _log_signal, signal.SIGINT, None)
 
     # Keep the server running forever.
     try:
-        while True:
-            await asyncio.sleep(3600)
+        await stopped.wait()
     finally:
         for t in list(_bg_tasks):
             t.cancel()
+        await asyncio.gather(*_bg_tasks, return_exceptions=True)
         await app["session"].close()
         await runner.cleanup()
+        db.close()
 
 
 if __name__ == "__main__":
