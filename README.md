@@ -261,6 +261,44 @@ token — and there are no per-agent bots to mint or manage.
   `systemctl disable --now <org>-<role>`, archive `/home/<org>-<role>`, remove
   the unit, the sudoers file if any, and the org-chart entry.
 
+## Git identity
+
+All attosys commits must use `Leonard Tan <lentan1029@gmail.com>` for both author
+and committer. This repository's policy is independent of other repositories.
+
+Install the guards once in each clone (including a fresh clone after a history rewrite):
+
+```sh
+python3 .githooks/identity.py install
+```
+
+The installer does not change Git configuration. It refuses to replace unmanaged
+hooks or a custom `core.hooksPath`. Installed hooks include their own policy copy,
+so they continue working when the checkout is moved. Reinstall after policy updates.
+
+Use the commit helper to select the right identity without relying on global defaults:
+
+```sh
+python3 .githooks/identity.py commit -m "describe the change"
+```
+
+The pre-commit guard checks the effective author and committer, including explicit
+author overrides. The commit-msg guard rejects unapproved attribution trailers.
+The pre-push guard checks every reachable commit and annotated tagger for every
+pushed ref, including new branches and imported commits. Shallow histories and
+unreadable metadata fail closed. This is an identity guard, not a secrets scanner.
+
+Verify the guards and existing history with:
+
+```sh
+python3 .githooks/test_identity.py -v
+python3 .githooks/identity.py check
+```
+
+The Commit identity workflow checks pushed and pull-request histories, but CI runs
+after upload. Local hooks must be installed in every clone to prevent accidental
+identity leaks before a push. Hooks can be deliberately bypassed; do not bypass them.
+
 ## Uninstall
 
 Remove everything `setup.sh` + `hire.py` created on the host — systemd units,
