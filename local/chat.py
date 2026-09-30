@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import hmac
 import json
 import os
@@ -8,6 +9,7 @@ import time
 import uuid
 
 from aiohttp import web
+from markdown_it import MarkdownIt
 import yaml
 
 ROOT = pathlib.Path(os.environ.get("ATTOSYS_ROOT", "/opt/attosys"))
@@ -26,6 +28,8 @@ INSERT INTO cursor SELECT 0 WHERE NOT EXISTS(SELECT 1 FROM cursor);
 """)
 wake = asyncio.Event()
 polling = False
+markdown = MarkdownIt('commonmark', {'html': False, 'breaks': True}).enable(['table', 'strikethrough']).disable('image')
+render_markdown = functools.lru_cache(maxsize=512)(markdown.render)
 
 
 def ok(result):
@@ -128,8 +132,11 @@ async def operator(request):
         return ok(message(data, "in", data.get("file")))
     company = yaml.safe_load((ROOT / "company.yaml").read_text())
     rows = db.execute("SELECT direction,body FROM (SELECT * FROM messages ORDER BY id DESC LIMIT 200) ORDER BY id").fetchall()
+    messages = [{"direction": row[0], **json.loads(row[1])} for row in rows]
+    for item in messages:
+        item['html'] = render_markdown(item.get('text') or item.get('caption') or '')
     return web.json_response({"company": company["name"], "agents": [{"name": f"{company['org']}-{role}", "topic": spec.get("topic_id")} for role, spec in company["agents"].items()],
-                              "messages": [{"direction": row[0], **json.loads(row[1])} for row in rows]})
+                              "messages": messages})
 
 
 async def page(request):
@@ -137,14 +144,35 @@ async def page(request):
 
 
 PAGE = """<!doctype html><html><meta charset=utf-8><title>Attosys local company</title>
-<style>body{max-width:1000px;margin:30px auto;font:15px system-ui;background:#151b20;color:#e2e9ee}header,form{display:flex;gap:12px;align-items:center}select,button,textarea,input{font:inherit;padding:8px;background:#24313a;color:inherit;border:1px solid #52616b;border-radius:5px}#messages{height:65vh;overflow:auto;margin:20px 0}article{white-space:pre-wrap;padding:12px;border-bottom:1px solid #34424b}small{color:#93a6b4}textarea{flex:1}#notice{min-height:24px;color:#edbd7d}</style>
-<header><h2 id=company>Local company</h2><select id=topic></select><small>Real employees · real tools · real model</small></header>
-<div id=messages></div><div id=notice></div><form id=compose><textarea id=text placeholder="Talk to this employee"></textarea><input id=file type=file><button>Send</button></form>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<style>body{max-width:1000px;margin:30px auto;padding:0 16px;font:15px system-ui;background:#151b20;color:#e2e9ee}header,form{display:flex;gap:12px;align-items:center}header{flex-wrap:wrap}select,button,textarea{font:inherit;padding:8px;background:#24313a;color:inherit;border:1px solid #52616b;border-radius:5px}#messages{height:65vh;overflow:auto;margin:20px 0}article{padding:12px;border-bottom:1px solid #34424b;overflow-wrap:anywhere}article p{margin:.5em 0}article pre{overflow:auto;padding:12px;background:#0d1216;border-radius:6px;white-space:pre;overflow-wrap:normal}article code{font:13px ui-monospace,monospace;background:#0d1216;padding:2px 4px;border-radius:3px}article pre code{padding:0}article blockquote{border-left:3px solid #52616b;margin:12px 0;padding-left:14px;color:#b4c4d0}article table{border-collapse:collapse;display:block;overflow:auto}article th,article td{border:1px solid #52616b;padding:6px 10px}article a{color:#8cc8ee}article h1,article h2,article h3{line-height:1.3}small{color:#93a6b4}textarea{flex:1;min-width:0;resize:vertical}#notice{min-height:24px;color:#edbd7d}#attachment{margin:8px 0;overflow-wrap:anywhere}#remove{margin-left:8px}button:disabled{opacity:.5}body.dropping{outline:2px dashed #8cc8ee;outline-offset:-6px;background:#1b2933}#hint{display:block;margin-top:8px}</style>
+<header><h2 id=company>Local company</h2><select id=topic aria-label="Employee topic"></select><small>Real employees · real tools · real model</small></header>
+<div id=messages role=log aria-live=polite></div><div id=notice role=status></div>
+<div id=attachment hidden><span id=filename></span><button id=remove type=button aria-label="Remove attachment">Remove</button></div>
+<form id=compose><textarea id=text rows=2 aria-label="Message" aria-describedby=hint placeholder="Write a message or drop a file here"></textarea><button id=send>Send</button></form>
+<small id=hint>Enter to send · Shift+Enter for a new line · Drop a file anywhere to attach</small>
 <script>
-const $=id=>document.getElementById(id);let state,signature='';
-function draw(){if(!state)return;const messages=state.messages.filter(m=>String(m.message_thread_id)===$('topic').value);const key=JSON.stringify(messages);if(key===signature)return;signature=key;const panel=$('messages'),stick=panel.scrollHeight-panel.scrollTop-panel.clientHeight<100;panel.replaceChildren();for(const m of messages){const a=document.createElement('article');a.textContent=(m.direction==='in'?'CEO: ':'')+(m.text||m.caption||'');const f=m.document||m.photo?.[0]||m.audio||m.voice||m.video;if(f){const link=document.createElement('a');link.textContent=' Download '+f.file_name;link.href='/files/'+f.file_id;link.download=f.file_name;a.append(link);}panel.append(a);}if(stick)panel.scrollTop=panel.scrollHeight;}
+const $=id=>document.getElementById(id);let state,signature='',attachment=null,sending=false,dragDepth=0;
+function draw(){if(!state)return;const messages=state.messages.filter(m=>String(m.message_thread_id)===$('topic').value);const key=JSON.stringify(messages);if(key===signature)return;signature=key;const panel=$('messages'),stick=panel.scrollHeight-panel.scrollTop-panel.clientHeight<100;panel.replaceChildren();for(const m of messages){const a=document.createElement('article');if(m.direction==='in'){const label=document.createElement('small');label.textContent='CEO';a.append(label);}const content=document.createElement('div');content.innerHTML=m.html||'';for(const link of content.querySelectorAll('a')){link.target='_blank';link.rel='noopener noreferrer';}a.append(content);const f=m.document||m.photo?.[0]||m.audio||m.voice||m.video;if(f){const link=document.createElement('a');link.textContent=' Download '+f.file_name;link.href='/files/'+f.file_id;link.download=f.file_name;a.append(link);}panel.append(a);}if(stick)panel.scrollTop=panel.scrollHeight;}
 async function refresh(){try{const r=await fetch('/api',{headers:{'X-Attobot-Lab':'1'}});if(!r.ok)throw Error('HTTP '+r.status);state=await r.json();$('company').textContent=state.company;const selected=$('topic').value;for(const a of state.agents){if(!a.topic||Array.from($('topic').options).some(o=>o.value===String(a.topic)))continue;const o=document.createElement('option');o.value=a.topic;o.textContent=a.name;$('topic').append(o);}if(selected)$('topic').value=selected;draw();}catch(e){$('notice').textContent=e.message;}setTimeout(refresh,1000);}
-$('topic').onchange=()=>{signature='';draw();};$('compose').onsubmit=async e=>{e.preventDefault();const data=new FormData();data.set('text',$('text').value);data.set('message_thread_id',$('topic').value);if($('file').files[0])data.set('file',$('file').files[0]);try{const r=await fetch('/api',{method:'POST',headers:{'X-Attobot-Lab':'1'},body:data});if(!r.ok)throw Error('HTTP '+r.status);$('text').value='';$('file').value='';$('notice').textContent='Queued';}catch(e){$('notice').textContent=e.message;}};refresh();
+function attach(file){attachment=file;$('attachment').hidden=!file;$('filename').textContent=file?file.name:'';}
+function hasFiles(e){return Array.from(e.dataTransfer?.types||[]).includes('Files');}
+$('remove').onclick=()=>{if(!sending)attach(null);};
+document.ondragenter=e=>{if(hasFiles(e)){e.preventDefault();dragDepth++;document.body.classList.add('dropping');}};
+document.ondragover=e=>{if(hasFiles(e)){e.preventDefault();e.dataTransfer.dropEffect=sending?'none':'copy';}};
+document.ondragleave=e=>{if(hasFiles(e)&&--dragDepth<=0){dragDepth=0;document.body.classList.remove('dropping');}};
+document.ondrop=e=>{if(!hasFiles(e))return;e.preventDefault();dragDepth=0;document.body.classList.remove('dropping');if(sending)return;const files=e.dataTransfer.files;if(files.length!==1){$('notice').textContent='Attach one file at a time.';return;}attach(files[0]);$('notice').textContent='File attached. Press Enter to send.';$('text').focus();};
+$('text').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing&&e.keyCode!==229){e.preventDefault();$('compose').requestSubmit();}};
+$('topic').onchange=()=>{signature='';draw();};
+$('compose').onsubmit=async e=>{
+  e.preventDefault();if(sending||(!$('text').value.trim()&&!attachment))return;
+  if(!$('topic').value){$('notice').textContent='Choose an employee first.';return;}
+  const data=new FormData();data.set('text',$('text').value);data.set('message_thread_id',$('topic').value);if(attachment)data.set('file',attachment);
+  sending=true;for(const id of ['text','topic','send','remove'])$(id).disabled=true;$('notice').textContent='Sending…';
+  try{const r=await fetch('/api',{method:'POST',headers:{'X-Attobot-Lab':'1'},body:data});if(!r.ok)throw Error('HTTP '+r.status);$('text').value='';attach(null);$('notice').textContent='Queued';}
+  catch(e){$('notice').textContent='Send failed: '+e.message;}
+  finally{sending=false;for(const id of ['text','topic','send','remove'])$(id).disabled=false;$('text').focus();}
+};refresh();
 </script></html>"""
 
 app = web.Application(client_max_size=16 * 1024 * 1024)

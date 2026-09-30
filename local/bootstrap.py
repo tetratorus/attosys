@@ -175,13 +175,25 @@ def check():
     print(json.dumps({'version': 1, 'employees': list(roster(company).values())}), flush=True)
 
 
+def start_workers(names, duration):
+    subprocess.run(["systemctl", "stop", "atto-discovery-deadline.timer", "atto-discovery-deadline.service"], capture_output=True)
+    subprocess.run(["systemctl", "reset-failed", "atto-discovery-deadline.service"], capture_output=True)
+    write(READY, "ready\n", 0o600)
+    if duration:
+        run("systemd-run", "--unit=atto-discovery-deadline", "--timer-property=AccuracySec=1s", f"--on-active={duration}",
+            "/usr/bin/python3", str(ROOT / "local/bootstrap.py"), "stop")
+    run("systemctl", "daemon-reload")
+    run("systemctl", "reset-failed", *[f"{user}.service" for user in names.values()])
+    run("systemctl", "start", "multi-user.target", *[f"{user}.service" for user in names.values()])
+
+
 def bootstrap(options):
     if pathlib.Path(RESTORE_PENDING).exists():
         raise ValueError('restore is incomplete; retry the original snapshot with a new --name')
     key = options.get("api_key") or ""
     workers = options.get("workers", True)
     duration = int(options.get("duration", 900))
-    if duration < 1 or any(character in key for character in "\r\n\x00"):
+    if duration < 0 or any(character in key for character in "\r\n\x00"):
         raise ValueError("invalid key or run duration")
     if workers and not key and not ENV_FILE.is_file():
         raise ValueError("an API key is required to start employees")
@@ -203,15 +215,15 @@ def bootstrap(options):
     else:
         company = {"org": "atto", "name": "Local Attosys", "ceo": {"name": "CEO", "telegram_user_id": 1},
                    "mux_url": "http://127.0.0.1:8811",
-                   "provider": "openai", "model": options.get("model", "gpt-6-astra"), "proxy_url": "http://127.0.0.1:8810",
-                   "llm_env_file": str(ENV_FILE), "agent_config": {"provider": "openai_responses", "max_tokens": 4096, "multimodal_support": True},
+                   "provider": options.get("provider", "openai"), "model": options.get("model", "gpt-6-astra"), "proxy_url": "http://127.0.0.1:8810",
+                   "llm_env_file": str(ENV_FILE), "agent_config": {"provider": "" if options.get("provider") == "deepseek" else "openai_responses", "max_tokens": 4096, "multimodal_support": True},
                    "agents": {role: {"sudo": role == "hr", "description": description} for role, description in {
                        "hr": "Head of HR and Chief of Staff", "sysadmin": "Owns company infrastructure", "labs": "Builds capabilities", "trainer": "Investigates and improves employee behavior"}.items()}}
     telegram.configure(ROOT, company, options, write, existing=existing)
     names = roster(company)
     prepare()
     if company['telegram_api_base'] == telegram.LOCAL_API:
-        unit("atto-chat", f"/usr/bin/python3 {ROOT}/local/chat.py", "_atto_chat",
+        unit("atto-chat", f"{ROOT}/venv/bin/python {ROOT}/local/chat.py", "_atto_chat",
              f"StateDirectory=atto-chat\nLoadCredential=secrets.yaml:{ROOT}/secrets.yaml")
         wait("http://127.0.0.1:8090/")
         if any(spec.get('topic_id') is None for spec in company['agents'].values()):
@@ -259,14 +271,7 @@ def bootstrap(options):
     write(STATE, json.dumps(state, indent=2) + '\n')
     check()
     if workers:
-        subprocess.run(["systemctl", "stop", "atto-discovery-deadline.timer", "atto-discovery-deadline.service"], capture_output=True)
-        subprocess.run(["systemctl", "reset-failed", "atto-discovery-deadline.service"], capture_output=True)
-        write(READY, "ready\n", 0o600)
-        run("systemd-run", "--unit=atto-discovery-deadline", "--timer-property=AccuracySec=1s", f"--on-active={duration}",
-            "/usr/bin/python3", str(ROOT / "local/bootstrap.py"), "stop")
-        run("systemctl", "daemon-reload")
-        run("systemctl", "reset-failed", *[f"{user}.service" for user in names.values()])
-        run("systemctl", "start", "multi-user.target", *[f"{user}.service" for user in names.values()])
+        start_workers(names, duration)
     print("Company running." if workers else "Company infrastructure ready; employees remain stopped.", flush=True)
 
 

@@ -20,7 +20,7 @@ import telegram
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCES = {
     "attobot": ["agent.py", "SOUL.md", "opt", "requirements.txt", "lab-constraints.txt"],
-    "attosys": ["hire.py", "seed.py", "services.py", "mux", "templates", "local/chat.py", "local/bootstrap.py", "local/telegram.py", "local/snapshot.py", "local/attosys-maintenance.target"],
+    "attosys": ["hire.py", "seed.py", "services.py", "mux", "templates", "local/chat.py", "local/requirements.txt", "local/bootstrap.py", "local/telegram.py", "local/snapshot.py", "local/attosys-maintenance.target"],
     "attotrain": ["*.py", "README.md", "steps", "tools", "tests"],
     "attobrowser": ["atto", "lib", "package.json", "package-lock.json"],
     "llmproxy": ["server.js", "stats-handler.js", "index.html", "package.json", "package-lock.json"],
@@ -192,10 +192,11 @@ def start(runtime, args):
         if not args.idle:
             key = os.environ.get('ATTOBOT_API_KEY') or ''
             if not key and not runtime.present(args.name, '/run/attosys/llm.env'):
-                key = getpass.getpass('OpenAI API key (kept only in VM tmpfs): ')
+                key = getpass.getpass('Model API key (kept only in VM tmpfs): ')
                 if not key:
                     raise ValueError('an API key is required')
-        runtime.bootstrap(args.name, 'start', {'api_key': key, 'model': args.model, 'duration': args.duration, 'workers': not args.idle, **chat})
+        runtime.bootstrap(args.name, 'start', {'api_key': key, 'model': args.model, 'provider': getattr(args, 'provider', 'openai'),
+                                               'duration': args.duration, 'workers': not args.idle, **chat})
     except BaseException:
         runtime.run('stop', args.name)
         raise
@@ -208,7 +209,7 @@ def start(runtime, args):
         print('Captured model requests: http://127.0.0.1:8810')
     else:
         print('No host ports published.')
-    print('Employees remain stopped.' if args.idle else f'Employee run deadline: {args.duration} seconds.')
+    print('Employees remain stopped.' if args.idle else f'Employee run deadline: {args.duration} seconds.' if args.duration else 'Employees run until explicitly stopped.')
 
 
 def stop(runtime, args):
@@ -327,7 +328,8 @@ def main():
     parser.add_argument('--runtime', choices=('auto', 'container', 'docker'), default='auto')
     parser.add_argument('--dns', default=None)
     parser.add_argument('--model', default='gpt-6-astra')
-    parser.add_argument('--duration', type=int, default=900)
+    parser.add_argument('--provider', choices=('openai', 'deepseek'), default='openai', help='model provider for a new company')
+    parser.add_argument('--duration', type=int, default=900, help='employee runtime in seconds; 0 runs until stopped')
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--no-build', action='store_true')
     parser.add_argument('--idle', action='store_true', help='start infrastructure without employees or an API key')
@@ -338,7 +340,7 @@ def main():
     args = parser.parse_args()
     if platform.system() not in ('Darwin', 'Linux'):
         parser.error('this launcher supports macOS and Linux hosts')
-    if not re.fullmatch(r'[a-z][a-z0-9-]{0,62}', args.name) or args.duration < 1:
+    if not re.fullmatch(r'[a-z][a-z0-9-]{0,62}', args.name) or args.duration < 0:
         parser.error('invalid company name or duration')
     if (args.command in ('save', 'restore')) != (args.archive is not None):
         parser.error('save and restore require an archive; start and stop do not take one')
