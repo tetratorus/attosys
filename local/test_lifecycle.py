@@ -191,7 +191,7 @@ class LifecycleTests(unittest.TestCase):
             print(f'Verified {len(expected)} packaged source files against the current checkouts.', flush=True)
             runtime.run('cp', __file__, source + ':/opt/attosys/local/test_lifecycle.py')
             runtime.run('cp', ROOT / 'local/test_persistence.py', source + ':/opt/attosys/local/test_persistence.py')
-            runtime.run('exec', source, 'python3', '-m', 'unittest', 'discover', '-s', '/opt/attosys/local', '-p', 'test_persistence.py', '-v')
+            runtime.run('exec', source, '/opt/attosys/venv/bin/python', '-m', 'unittest', 'discover', '-s', '/opt/attosys/local', '-p', 'test_persistence.py', '-v')
             inside(source, 'prepare')
             runtime.bootstrap(source, 'pause')
             inside(source, 'quiescent')

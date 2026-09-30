@@ -19,8 +19,8 @@ import telegram
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SOURCES = {
-    "attobot": ["agent.py", "SOUL.md", "opt", "requirements.txt", "lab-constraints.txt"],
-    "attosys": ["hire.py", "seed.py", "services.py", "mux", "templates", "local/chat.py", "local/requirements.txt", "local/bootstrap.py", "local/telegram.py", "local/snapshot.py", "local/attosys-maintenance.target"],
+    "attobot": ["agent.py", "SOUL.md", "opt", "requirements.txt"],
+    "attosys": ["hire.py", "seed.py", "services.py", "mux", "templates", "local/chat.py", "local/requirements.txt", "local/constraints.txt", "local/bootstrap.py", "local/telegram.py", "local/snapshot.py", "local/attosys-maintenance.target"],
     "attotrain": ["*.py", "README.md", "steps", "tools", "tests"],
     "attobrowser": ["atto", "lib", "package.json", "package-lock.json"],
     "llmproxy": ["server.js", "stats-handler.js", "index.html", "package.json", "package-lock.json"],
@@ -122,8 +122,8 @@ def build(runtime, args):
                     else:
                         shutil.copy2(source, target)
         shutil.copy2(ROOT / 'local/Containerfile', context / 'Containerfile')
-        if not (context / 'attobot/lab-constraints.txt').is_file():
-            raise ValueError('build context is missing attobot dependency constraints')
+        if not (context / 'attosys/local/constraints.txt').is_file():
+            raise ValueError('build context is missing company dependency constraints')
         print(f"Building {sum(path.is_file() for path in context.rglob('*'))} source files", flush=True)
         dns = ['--dns', args.dns] if args.dns and runtime.kind == 'container' else []
         runtime.run('build', *dns, '--file', 'Containerfile', '--tag', 'attosys-local', '--progress', 'plain', '.', cwd=context)

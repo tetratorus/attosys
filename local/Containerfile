@@ -5,7 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git curl ca-certificates chromium build-essential && apt-get clean
 COPY . /opt/
 RUN python3 -m venv --system-site-packages /opt/attosys/venv \
-    && /opt/attosys/venv/bin/pip install -r /opt/attobot/requirements.txt -c /opt/attobot/lab-constraints.txt -r /opt/attosys/local/requirements.txt \
+    && /opt/attosys/venv/bin/pip install -r /opt/attobot/requirements.txt -c /opt/attosys/local/constraints.txt -r /opt/attosys/local/requirements.txt \
     && npm ci --prefix /opt/llmproxy && npm ci --prefix /opt/attobrowser \
     && ln -s /opt/attobot /opt/attosys/harness \
     && ln -s /opt/attobrowser/atto /usr/local/bin/atto \
